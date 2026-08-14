@@ -1,0 +1,36 @@
+# --- Data ---------------------------------------------------------------
+# The raw subset is ~662 MB and the full source file ~31 GB -- both are far
+# over GitHub's 100 MB per-file limit. The data is public: see the README for
+# how to obtain and reproduce the subset.
+data/*
+!data/.gitkeep
+!data/README.md
+
+# --- Python -------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# --- Notebooks ----------------------------------------------------------
+.ipynb_checkpoints/
+
+# --- Models / large artefacts -------------------------------------------
+*.pt
+*.pth
+*.joblib
+*.pkl
+
+# --- macOS --------------------------------------------------------------
+.DS_Store
+
+# --- Local tooling ------------------------------------------------------
+.claude/settings.local.json
+
+# --- Internal notes -----------------------------------------------------
+# Research-phase handover notes, kept local. Every methodological decision,
+# limitation and simplification they record is stated in README.md, which is
+# the public-facing account.
+CLAUDE.md

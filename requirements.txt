@@ -1,0 +1,27 @@
+# Pinned to the versions this project was developed and evaluated against.
+# Install with:  pip install -r requirements.txt && pip install -e .
+#
+# macOS note: xgboost requires the OpenMP runtime, which is not bundled.
+#   brew install libomp
+
+# --- data handling ---
+pandas==3.0.5
+numpy==2.5.2
+pyarrow==25.0.1
+scipy==1.18.0
+
+# --- modelling ---
+scikit-learn==1.9.0
+statsmodels==0.14.6       # SARIMA / SARIMAX
+xgboost==3.4.0            # gradient-boosted trees
+torch==2.13.0             # LSTM (MPS-accelerated on Apple Silicon)
+imbalanced-learn==0.14.2  # SMOTE / ADASYN
+
+# --- visualisation ---
+matplotlib==3.11.1
+seaborn==0.13.2
+
+# --- notebooks ---
+jupyterlab==4.6.3
+ipykernel==7.3.0
+tqdm==4.70.0

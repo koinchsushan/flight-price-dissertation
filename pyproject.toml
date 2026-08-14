@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flightprice"
+version = "0.1.0"
+description = "Predicting seasonal demand and price spikes in flight ticket pricing (MSc dissertation, CS7P01)"
+requires-python = ">=3.12"
+
+[tool.setuptools.packages.find]
+where = ["src"]
