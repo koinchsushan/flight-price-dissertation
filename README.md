@@ -18,7 +18,11 @@ long-haul and a short-haul US domestic route.
 ## Data
 
 **Source:** [`dilwong/flightprices`](https://www.kaggle.com/datasets/dilwong/flightprices) —
-one-way US domestic itineraries scraped from Expedia, **16 Apr – 5 Oct 2022**.
+one-way US domestic itineraries scraped from Expedia.
+
+Two windows matter and are easily conflated. Fares were **scraped** between 16 Apr and
+5 Oct 2022, but each search returned flights departing up to two months later, so **departure
+dates run from 17 Apr to 19 Nov 2022** — 45 days beyond the final scrape.
 
 The full release is 82,138,753 rows / ~31 GB and will exhaust memory under a naive
 `pandas.read_csv`. This project works from a pre-extracted subset of four directional
@@ -103,10 +107,16 @@ top of each notebook. Dependencies are pinned in `requirements.txt`.
 
 ## Scope and limitations
 
-- The observation window is **April–October 2022 only**. There is no November or December
-  data, so no Thanksgiving or Christmas signal exists. Seasonality findings are scoped to
-  summer travel and the four in-window federal holidays, and are not claims about full-year
-  seasonality.
+- **No Thanksgiving or Christmas signal is observable.** Departure dates end on 19 Nov 2022,
+  five days short of Thanksgiving. Seasonality findings are scoped to summer travel and the
+  four in-window federal holidays, and are not claims about full-year seasonality.
+- **Late departures are right-censored.** Scraping stopped on 5 Oct, so a flight departing in
+  mid-November was never observed closer than 27 days out. Because the final approach to
+  departure is where revenue-management fare surges occur, spike analysis is restricted to
+  departures on or before **12 Oct 2022** — the last date whose price trajectory is observable
+  down to one day before departure. This retains 90.3% of rows. Including the censored
+  flights would bias spike rates downward, since the window in which spikes occur is
+  systematically unobserved for them.
 - The short-haul route (BOS–LGA) receives the same pipeline and feature set as the long-haul
   route but is **not independently tuned** — a deliberate scope decision given the project
   timeline, stated rather than hidden.

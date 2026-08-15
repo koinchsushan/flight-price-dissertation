@@ -63,11 +63,29 @@ def set_seeds(seed: int = RANDOM_SEED) -> None:
 # Dataset constants
 # --------------------------------------------------------------------------- #
 
-#: Observation window of the source dataset. No November/December data exists,
-#: so no Thanksgiving or Christmas signal is observable -- seasonality claims
-#: must be scoped accordingly (README, "Scope and limitations").
-DATA_START: date = date(2022, 4, 16)
-DATA_END: date = date(2022, 10, 5)
+#: Window over which fares were *scraped*. Nothing was observed after
+#: ``SEARCH_END``, which is what right-censors the late departures below.
+SEARCH_START: date = date(2022, 4, 16)
+SEARCH_END: date = date(2022, 10, 5)
+
+#: Window of *departure* dates present in the data. This runs 45 days beyond
+#: ``SEARCH_END`` because a search on any given day returns flights departing
+#: up to roughly two months later. Verified against the subset in notebook 01.
+FLIGHT_START: date = date(2022, 4, 17)
+FLIGHT_END: date = date(2022, 11, 19)
+
+#: Last departure date whose price trajectory is observable all the way down to
+#: one day before departure. Flights departing after this are right-censored:
+#: scraping stopped on ``SEARCH_END``, so a flight departing 19 Nov is never
+#: observed closer than 27 days out. Since the final approach to departure is
+#: exactly where revenue-management price surges occur, spike analysis is
+#: restricted to departures on or before this date (see notebook 01).
+FULL_TRAJECTORY_END: date = date(2022, 10, 12)
+
+#: Thanksgiving 2022 (24 Nov) falls five days after ``FLIGHT_END`` and
+#: Christmas is far outside it, so neither is observable. Seasonality claims are
+#: scoped to summer travel and the four in-window federal holidays below.
+THANKSGIVING_2022: date = date(2022, 11, 24)
 
 #: ``segmentsCabinCode`` values representing a pure-coach itinerary across all
 #: legs. These cover 99.83% of the subset; the remaining 0.17%
