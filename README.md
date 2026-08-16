@@ -49,13 +49,26 @@ materially changing the quartiles.
 theory), day of week, non-stop flag, US federal holiday flag, and a summer-season proxy
 (Memorial Day → Labor Day, standing in for school-term dates).
 
-**Spike definition.** A fare deviating from its rolling mean by more than 2 rolling standard
-deviations, adapted from Lee et al. (2024). The window size is re-tuned empirically rather
-than inherited, since the relevant unit here is days-before-departure rather than calendar
-days. Framed as **binary classification**, not point-price regression.
+**Spike definition.** A fare deviating from the rolling mean of its own trajectory by more
+than 2 rolling standard deviations, adapted from Lee et al. (2024). A trajectory is one
+itinerary (`legId`) observed across successive search dates. Rolling statistics are
+**causal** — computed from prior observations only — so that labels remain usable at
+prediction time. The window was tuned empirically to **10 observations**: the 20 used for
+daily commodity closes would have been unusable for 65% of flights, whose median trajectory
+is 9 observations. Framed as **binary classification**, not point-price regression.
 
-**Class imbalance.** SMOTE / ADASYN / undersampling, selected against the observed
-minority-class count rather than assumed in advance.
+Spikes are labelled as **events** (the first observation of each run) rather than as
+sustained states. One fare rise remains elevated against a trailing window for several
+subsequent observations, so a per-observation label counts a single price change many times
+and would train a model to detect "this fare is currently high" instead of "this fare is
+about to jump".
+
+**Class imbalance.** The observed minority class is 108,495 spike events against 1,281,015
+negatives — a ratio of **1:11.8**, moderate rather than severe. Synthetic oversampling
+(SMOTE/ADASYN) is therefore not used: it exists to manufacture signal for minority classes
+too small to learn from, which is not the situation here, and it would distort temporal
+ordering. Class weighting and decision-threshold tuning are used instead, measured against an
+unweighted baseline.
 
 **Validation.** Rolling-origin (walk-forward). García Crespi et al. (2026) show model
 rankings can *reverse* between a single chronological split and rolling-origin validation on
@@ -123,9 +136,14 @@ top of each notebook. Dependencies are pinned in `requirements.txt`.
 - The routes are US domestic rather than the UK-originating routes of the original proposal.
   No free longitudinal fare dataset with the required repeated-search structure exists for
   any UK route; the research questions are unchanged.
-- SMOTE interpolates in feature space and does not inherently respect temporal ordering.
-  Where plain SMOTE is used, this is recorded as a stated simplification against
-  time-series-aware alternatives.
+- **Flight fares are step functions, not continuous series.** 61.8% of consecutive
+  observations of the same flight repeat the previous fare exactly, and a typical flight
+  shows only 4 distinct fares across 9 observations — fares sit in quantised booking buckets
+  and jump between them. Inside a flat run the rolling standard deviation collapses toward
+  zero, so any bucket change clears a 2σ threshold regardless of its economic size. The
+  threshold therefore partly measures fare-bucket transitions rather than unusual price
+  movements. This is a genuine difference from the commodity-price series the definition was
+  adapted from, and it qualifies the spike results rather than invalidating them.
 
 ## Key references
 

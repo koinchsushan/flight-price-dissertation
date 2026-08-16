@@ -131,11 +131,18 @@ SUMMER_END: date = date(2022, 9, 5)
 #: rolling standard deviations (Lee et al., 2024).
 SPIKE_SIGMA: float = 2.0
 
-#: Starting window size, in observations, inherited from Lee et al. (2024) who
-#: used 20 daily commodity closes. NOT yet validated on flight data -- the unit
-#: here is days-before-departure, not calendar days. Tuned empirically in
-#: notebook 02.
-SPIKE_WINDOW_DEFAULT: int = 20
+#: Rolling window, in observations, over a single flight's fare trajectory.
+#: Tuned empirically in notebook 02; Lee et al. (2024) used 20 daily commodity
+#: closes, which does not transfer directly here -- the unit is successive
+#: searches for one flight, not calendar days, and 85.8% of consecutive searches
+#: are exactly one day apart so a window of 10 spans roughly 10 days.
+SPIKE_WINDOW: int = 10
+
+#: Prior observations required before a spike verdict is issued. The median
+#: flight is observed 9 times, so demanding a full window would discard most
+#: trajectories; 5 keeps coverage at ~72% of rows while still estimating the
+#: standard deviation from a usable sample.
+SPIKE_MIN_PERIODS: int = 5
 
 # --------------------------------------------------------------------------- #
 # Plotting
