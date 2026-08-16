@@ -90,6 +90,7 @@ distribution.
 │   ├── models/             SARIMA, XGBoost, LSTM
 │   └── evaluation/         Metrics and model comparison
 ├── notebooks/              One notebook per phase — narrative, analysis, figures
+├── scripts/                verify_setup.py (environment check), build_subset.py
 ├── reports/figures/        Generated figures (300 dpi PNG)
 └── data/                   Not committed; see data/README.md
 ```
@@ -99,18 +100,110 @@ readable end-to-end while avoiding copy-pasted code between phases.
 
 ## Setup
 
-Requires Python ≥ 3.12. On macOS, XGBoost additionally needs the OpenMP runtime.
+Works on macOS, Windows and Linux. The only prerequisite is **Python 3.12 or newer** —
+check with `python --version` (or `python3 --version` on macOS/Linux), and install it from
+[python.org](https://www.python.org/downloads/) if needed. On Windows, tick
+*"Add Python to PATH"* in the installer.
+
+Each step below gives the macOS/Linux command first, then the Windows equivalent. Run them
+from the repository root.
+
+### 1. Create and activate a virtual environment
+
+This keeps the project's packages separate from the rest of your system.
+
+**macOS / Linux**
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+```
+
+**Windows (PowerShell)**
+```powershell
+py -m venv .venv; .venv\Scripts\Activate.ps1
+```
+
+Your prompt should now start with `(.venv)`. Re-run the activate command in any new terminal.
+
+> If PowerShell blocks the script with an execution-policy error, run
+> `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` and try again. This applies
+> to the current window only.
+
+### 2. Install the OpenMP runtime — macOS only
+
+XGBoost does not bundle this on macOS and will fail to import without it. Skip this step on
+Windows and Linux, where the wheels normally work as-is — if XGBoost does fail to import
+there, see Troubleshooting below.
 
 ```bash
-brew install libomp          # macOS only
-python3 -m venv .venv
-source .venv/bin/activate
+brew install libomp
+```
+
+If you do not have Homebrew, install it from [brew.sh](https://brew.sh).
+
+### 3. Install the dependencies
+
+```bash
 pip install -r requirements.txt
 pip install -e .
 ```
 
-Then place `jfk_lax_bos_lga.csv` in `data/` (see [`data/README.md`](data/README.md)) and run
-the notebooks in numerical order.
+The second command installs this project's own code so the notebooks can import
+`flightprice` without any path juggling. Expect a few minutes — PyTorch is a large download.
+
+### 4. Register the Jupyter kernel
+
+The notebooks are saved against a kernel named `flightprice`. Without this step they will
+open with no kernel attached and will not run.
+
+```bash
+python -m ipykernel install --user --name flightprice --display-name "Python (flightprice)"
+```
+
+### 5. Get the data
+
+The dataset is not in this repository — it is far too large for GitHub. Follow
+[`data/README.md`](data/README.md), which covers both downloading the ready-made subset and
+rebuilding it from the full Kaggle release.
+
+### 6. Check everything worked
+
+```bash
+python scripts/verify_setup.py
+```
+
+This checks the Python version, every required package, the compute device, the project
+import, the data files and the Jupyter kernel. Each failure prints the exact command that
+fixes it. When it reports all checks passed, you are ready.
+
+### 7. Run the notebooks
+
+Open the `notebooks/` folder in VS Code or JupyterLab and run them **in numerical order** —
+each writes files the next one reads. Select the **Python (flightprice)** kernel when
+prompted.
+
+```bash
+jupyter lab            # or: code .
+```
+
+To run one non-interactively instead:
+
+```bash
+jupyter nbconvert --to notebook --execute --inplace --ExecutePreprocessor.kernel_name=flightprice notebooks/01_data_cleaning.ipynb
+```
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `XGBoostError: ... libomp.dylib ... not loaded` | macOS is missing the OpenMP runtime. Run `brew install libomp`. |
+| `XGBoostError: ... vcomp140.dll ... not loaded` | Windows is missing the Visual C++ runtime. Install the [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist) and restart the terminal. |
+| `ModuleNotFoundError: No module named 'flightprice'` | The project was not installed. Run `pip install -e .` from the repository root with the venv active. |
+| Notebook shows "no kernel" or "kernel not found" | Step 4 was skipped. Register the kernel, then reopen the notebook. |
+| `ModuleNotFoundError: No module named 'polars'` | Only needed to rebuild the subset. Run `pip install polars`. |
+| `FileNotFoundError: ... jfk_lax_bos_lga.csv` | The dataset is missing. See [`data/README.md`](data/README.md). |
+| PowerShell: "running scripts is disabled on this system" | Run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`, then activate again. |
+| `jupyter nbconvert` runs the wrong Python (pyenv users) | The pyenv shim intercepts the subcommand. Call the venv binary directly: `.venv/bin/jupyter-nbconvert`. |
+| Notebook 02 is slow | Expected. It computes rolling statistics over ~1.9 M rows for seven window sizes; several minutes is normal. |
 
 ## Reproducibility
 

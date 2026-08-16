@@ -18,35 +18,60 @@ data/
 domestic itineraries scraped from Expedia between **16 April and 5 October 2022**.
 The full file, `itineraries.csv`, is 82,138,753 rows across 27 columns.
 
-## Reproducing the subset
+## Getting the data
 
-The subset is the full file filtered to four directional airport pairs: `JFK→LAX`, `LAX→JFK`,
-`BOS→LGA`, `LGA→BOS`.
+You need `jfk_lax_bos_lga.csv` in this folder. There are two ways to get it.
 
-**Do not attempt this with a plain `pandas.read_csv`** — the full file exhausts memory even
-with `usecols` column trimming. Stream it instead:
+### Option A — use a copy of the subset (recommended)
 
-```python
-import polars as pl
+If you have been given the ~662 MB `jfk_lax_bos_lga.csv` directly, just place it in this
+folder. Nothing else is required. This is by far the quicker route: it skips a 31 GB download
+entirely.
 
-ROUTES = [("JFK", "LAX"), ("LAX", "JFK"), ("BOS", "LGA"), ("LGA", "BOS")]
+### Option B — rebuild it from the full Kaggle release
 
-(
-    pl.scan_csv("itineraries.csv")
-    .filter(
-        pl.concat_str([pl.col("startingAirport"), pl.col("destinationAirport")])
-        .is_in([a + b for a, b in ROUTES])
-    )
-    .collect(engine="streaming")
-    .write_csv("jfk_lax_bos_lga.csv")
-)
-```
+Only necessary if you are reproducing the extraction from scratch.
 
-> `polars` 1.25.0 renamed the streaming parameter from `streaming=True` to
-> `engine="streaming"`. The older form still runs but emits a deprecation warning.
+**Before you start, be aware of what this involves:**
 
-A chunked `csv.reader` loop achieves the same result more slowly and without the extra
-dependency.
+- A **free Kaggle account**, and accepting the dataset's terms on its page.
+- A **~31 GB download**, plus room for the output — budget **40 GB of free disk space**.
+- **Tens of minutes to a few hours**, depending on your connection and disk speed.
+
+**Steps**
+
+1. Download `itineraries.csv` from
+   [kaggle.com/datasets/dilwong/flightprices](https://www.kaggle.com/datasets/dilwong/flightprices)
+   and unzip it. You can use the website's Download button — no API setup needed.
+
+2. Install `polars`, which streams the file rather than loading it into memory. It is not in
+   `requirements.txt` because it is only needed for this one step:
+
+   ```bash
+   pip install polars
+   ```
+
+3. Run the extraction script, pointing it at wherever you saved the file:
+
+   ```bash
+   python scripts/build_subset.py --input /path/to/itineraries.csv
+   ```
+
+   On Windows the path looks like `C:\Users\you\Downloads\itineraries.csv`.
+
+   The script filters to the four directional airport pairs `JFK→LAX`, `LAX→JFK`, `BOS→LGA`
+   and `LGA→BOS`, writes the result to `data/jfk_lax_bos_lga.csv`, and reports the row count.
+   It streams throughout, so memory use stays low regardless of the input size.
+
+4. Confirm it reports **2,156,316 rows**. If it does not, the script says so — most likely
+   the source file differs from the published release.
+
+> **Do not try this with a plain `pandas.read_csv`.** The full file exhausts memory even with
+> `usecols` column trimming — this was confirmed on Kaggle's own hosted notebooks, not
+> assumed.
+
+Once the file is in place, run `python scripts/verify_setup.py` from the repository root to
+confirm everything is ready.
 
 ## Expected row counts
 
