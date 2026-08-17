@@ -145,6 +145,27 @@ SPIKE_WINDOW: int = 10
 SPIKE_MIN_PERIODS: int = 5
 
 # --------------------------------------------------------------------------- #
+# Validation
+# --------------------------------------------------------------------------- #
+
+#: Number of rolling-origin (walk-forward) folds for the primary route.
+#: García Crespi et al. (2026) found model rankings can reverse between a single
+#: chronological split and rolling-origin validation, so the model comparison --
+#: which is what research questions 1 and 2 turn on -- cannot rest on one split.
+VALIDATION_N_SPLITS: int = 5
+
+#: Length of each fold's test window, in days. Five folds of 14 days each leaves
+#: roughly 100 days to train the earliest fold, and every test window carries
+#: 9,600-12,200 spike events, so no fold is too thin for a stable F1.
+VALIDATION_TEST_DAYS: int = 14
+
+#: Column defining the split timeline. Departure date, NOT search date: one
+#: itinerary is searched repeatedly over weeks, so cutting on `searchDate`
+#: leaves 61.8% of test flights also present in training. See
+#: `flightprice.evaluation.splitting`.
+VALIDATION_DATE_COL: str = "flightDate"
+
+# --------------------------------------------------------------------------- #
 # Plotting
 # --------------------------------------------------------------------------- #
 

@@ -70,10 +70,17 @@ too small to learn from, which is not the situation here, and it would distort t
 ordering. Class weighting and decision-threshold tuning are used instead, measured against an
 unweighted baseline.
 
-**Validation.** Rolling-origin (walk-forward). García Crespi et al. (2026) show model
-rankings can *reverse* between a single chronological split and rolling-origin validation on
-a structurally similar comparison — a single split is not sufficient to support a
-"which model wins" claim.
+**Validation.** Rolling-origin (walk-forward), five folds of 14 days, on the primary route.
+García Crespi et al. (2026) show model rankings can *reverse* between a single chronological
+split and rolling-origin validation on a structurally similar comparison, so a single split
+cannot support a "which model wins" claim. The secondary route uses a single chronological
+split, consistent with its lighter validation pass.
+
+Splits are taken on **departure date, not search date**. A single itinerary is searched
+repeatedly over weeks, so cutting on `searchDate` leaves 61.8% of test flights also present
+in training, and the model would be scored partly on trajectories it had already memorised.
+Cutting on departure date keeps each trajectory wholly on one side; `assert_no_group_leakage`
+verifies this and is run before any model is fitted.
 
 **Metrics.** RMSE and MAE for price level; precision, recall and F1 for spike
 classification — deliberately **not accuracy**, which is trivially high under this class
