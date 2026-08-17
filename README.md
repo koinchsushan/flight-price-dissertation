@@ -45,9 +45,18 @@ materially changing the quartiles.
 
 ## Method
 
-**Features.** Days before departure (the primary temporal driver, per revenue-management
-theory), day of week, non-stop flag, US federal holiday flag, and a summer-season proxy
-(Memorial Day → Labor Day, standing in for school-term dates).
+**Features.** 32 predictors in five groups: temporal (booking horizon, day of week),
+calendar (holiday proximity, summer-season proxy standing in for school-term dates),
+itinerary (route, stops, airline, departure hour, duration), lagged observations, and
+categoricals.
+
+The set is constrained by **what is knowable at prediction time**. Since the question is
+whether a spike can be predicted *before* it happens, the prediction stands at observation
+*t−1* and asks about *t*, so quantities observed *at t* are excluded. `totalFare` in
+particular can never be a predictor — the spike label is a deterministic function of it.
+Adding it lifts ROC AUC from 0.815 to 0.997, which is the signature of leakage rather than a
+result; `assert_no_leaky_features` enforces the exclusion and is verified to fire. The fare
+and seat count enter lagged instead.
 
 **Spike definition.** A fare deviating from the rolling mean of its own trajectory by more
 than 2 rolling standard deviations, adapted from Lee et al. (2024). A trajectory is one
