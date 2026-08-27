@@ -177,6 +177,6 @@ The most likely way to lose marks is to overstate. Each of these is contradicted
 | "XGBoost beats the naive baseline" | On RMSE yes; on MAE persistence wins every single fold. |
 | Comparing SARIMA's RMSE with XGBoost's per-observation RMSE | Different targets. Daily averaging removes most of the variance. |
 | "Holidays raise fares by X" | Not estimable from four holidays. |
-| "Season drives spikes" | `isSummerSeason` scores exactly zero importance for spike timing. |
+| "Season drives spikes" | `isSummerSeason` carries 3.33% of importance on long-haul and 2.67% on short-haul, against 4.84% for `daysBeforeDeparture` on the same fits. Importance is not an effect size, and no seasonal magnitude is estimable from one summer. |
 | "Spikes can be predicted reliably" | F1 ≈ 0.35. At useful recall most warnings are false alarms. |
 | Any accuracy figure as a headline | A do-nothing classifier is over 90% accurate here. |

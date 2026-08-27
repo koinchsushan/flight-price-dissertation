@@ -291,6 +291,16 @@ def main() -> int:
     ]
 
     parts += [heading("8. Claims that must NOT be made", 2)]
+
+    # Read from the fold-averaged importance table rather than asserting a value.
+    # An earlier version of this line claimed isSummerSeason scored exactly zero.
+    # That came from the single-fold diagnostic in notebook 03, which the figure
+    # index above marks as superseded; the fold-averaged fits do not agree with it.
+    imp = pd.read_csv(RESULTS / "04_xgboost_feature_importance.csv", index_col=0)
+    season_long = imp.loc["isSummerSeason", "long-haul"]
+    season_short = imp.loc["isSummerSeason", "short-haul"]
+    horizon_long = imp.loc["daysBeforeDeparture", "long-haul"]
+
     parts += [
         "The most likely way to lose marks is to overstate. Each of these is contradicted by "
         "the project's own results.",
@@ -303,7 +313,10 @@ def main() -> int:
         "| \"XGBoost beats the naive baseline\" | On RMSE yes; on MAE persistence wins every single fold. |",
         "| Comparing SARIMA's RMSE with XGBoost's per-observation RMSE | Different targets. Daily averaging removes most of the variance. |",
         "| \"Holidays raise fares by X\" | Not estimable from four holidays. |",
-        "| \"Season drives spikes\" | `isSummerSeason` scores exactly zero importance for spike timing. |",
+        f"| \"Season drives spikes\" | `isSummerSeason` carries {season_long:.2f}% of "
+        f"importance on long-haul and {season_short:.2f}% on short-haul, against "
+        f"{horizon_long:.2f}% for `daysBeforeDeparture` on the same fits. Importance is not an "
+        f"effect size, and no seasonal magnitude is estimable from one summer. |",
         "| \"Spikes can be predicted reliably\" | F1 ≈ 0.35. At useful recall most warnings are false alarms. |",
         "| Any accuracy figure as a headline | A do-nothing classifier is over 90% accurate here. |",
     ]
