@@ -1,0 +1,5 @@
+route,specification
+JFK-LAX,"SARIMA(2, 1, 1)(1, 1, 0, 7)"
+LAX-JFK,"SARIMA(2, 1, 2)(1, 1, 0, 7)"
+BOS-LGA,"SARIMA(2, 0, 0)(1, 1, 0, 7)"
+LGA-BOS,"SARIMA(2, 1, 0)(1, 1, 0, 7)"

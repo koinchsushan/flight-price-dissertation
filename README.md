@@ -91,6 +91,14 @@ in training, and the model would be scored partly on trajectories it had already
 Cutting on departure date keeps each trajectory wholly on one side; `assert_no_group_leakage`
 verifies this and is run before any model is fitted.
 
+**Model granularity differs, and results are reported accordingly.** XGBoost and the LSTM
+predict the fare of one itinerary at one search date. SARIMA is univariate and cannot: it
+models the daily mean fare per route, since the raw data is ~63,000 short overlapping
+trajectories with a median length of 20 — too short to identify a weekly seasonal term. The
+two targets are not comparable on RMSE, so persistence and XGBoost are additionally evaluated
+on the daily series under the same folds and protocol, giving a like-for-like comparison.
+Model rankings differ between the two granularities, and both are reported.
+
 **Metrics.** RMSE and MAE for price level; precision, recall and F1 for spike
 classification — deliberately **not accuracy**, which is trivially high under this class
 distribution.
