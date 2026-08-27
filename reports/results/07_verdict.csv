@@ -4,6 +4,6 @@ RQ1 daily series,SARIMA,"median RMSE 19.4 vs 29.9, p < 0.05 over 20 cells"
 RQ1 vs naive,split decision,"XGBoost wins RMSE, persistence wins MAE, 10/10 folds"
 RQ2 best family,XGBoost,"F1 0.350 vs 0.265, 5/5 folds, p < 0.01"
 RQ2 best configuration,not separable,"F1 0.350 / 0.374 / 0.377, all p > 0.05"
-RQ2 deployment choice,weighted,lowest expected cost when a miss costs more than a false alarm
+RQ2 deployment choice,depends on cost ratio,"unweighted cheapest below 5x, weighted 5-27x, LSTM above 28x"
 RQ3 strongest factor,daysBeforeDeparture,~2x more important on short-haul
 RQ3 holidays,not estimable,4 holidays in window; SARIMAX degrades on the only holiday fold
