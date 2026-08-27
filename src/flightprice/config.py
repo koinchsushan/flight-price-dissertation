@@ -9,6 +9,7 @@ research phase; each is documented in the README.
 from __future__ import annotations
 
 import random
+import sys
 from datetime import date
 from pathlib import Path
 
@@ -42,16 +43,19 @@ RANDOM_SEED: int = 42
 def set_seeds(seed: int = RANDOM_SEED) -> None:
     """Seed every RNG the pipeline touches.
 
-    Call once at the top of each notebook, before any model is built. ``torch``
-    is imported lazily so that the data-only notebooks do not pay its import
-    cost.
+    Call once at the top of each notebook, before any model is built.
     """
     random.seed(seed)
     np.random.seed(seed)
 
-    try:
-        import torch
-    except ImportError:  # torch is only needed for the LSTM
+    # Torch is seeded only when it is ALREADY loaded, and is deliberately not
+    # imported here. PyTorch and XGBoost each bundle their own OpenMP runtime,
+    # and loading both into one process aborts it on macOS -- the failure shows
+    # up as a Jupyter kernel dying with no traceback, far from this line. A
+    # notebook that needs torch imports it itself; one that does not must not
+    # have it pulled in as a side effect of seeding.
+    torch = sys.modules.get("torch")
+    if torch is None:
         return
 
     torch.manual_seed(seed)
