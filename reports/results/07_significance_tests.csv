@@ -1,0 +1,20 @@
+metric,model A,model B,mean A,mean B,difference,A wins,sd of diffs,p,better,verdict
+rmse,SARIMA,persistence,25.064,43.9963,-18.9323,18/20,16.1539,0.0,SARIMA,distinguishable
+mae,SARIMA,persistence,19.6143,33.8345,-14.2202,18/20,12.3959,0.0001,SARIMA,distinguishable
+f1,XGB unweighted,LSTM,0.3739,0.2649,0.109,5/5,0.0186,0.0002,XGB unweighted,distinguishable
+f1,XGB weighted,LSTM,0.35,0.2649,0.0851,5/5,0.0257,0.0018,XGB weighted,distinguishable
+roc_auc,XGB weighted,LSTM,0.8599,0.8243,0.0356,5/5,0.0118,0.0025,XGB weighted,distinguishable
+rmse,XGBoost (both routes),persistence (both routes),34.4127,38.4389,-4.0262,9/10,3.8477,0.0091,XGBoost (both routes),distinguishable
+rmse,SARIMA,xgboost (daily),25.064,35.2435,-10.1794,15/20,17.1154,0.0155,SARIMA,distinguishable
+mae,SARIMA,xgboost (daily),19.6143,29.2368,-9.6225,17/20,16.9456,0.02,SARIMA,distinguishable
+mae,LSTM,persistence,29.6142,22.4635,7.1507,0/5,4.3765,0.0217,persistence,distinguishable
+mae,XGBoost (both routes),persistence (both routes),19.7474,16.2348,3.5127,0/10,4.7903,0.0456,persistence (both routes),distinguishable
+mae,XGBoost,persistence,27.8862,22.4635,5.4227,0/5,6.4004,0.1311,—,within fold noise
+f1,XGB unweighted,XGB weighted,0.3739,0.35,0.0239,4/5,0.0305,0.1541,—,within fold noise
+rmse,SARIMA,sarimax,25.064,29.2677,-4.2037,9/20,13.4346,0.1778,—,within fold noise
+mae,SARIMA,sarimax,19.6143,22.287,-2.6727,10/20,8.8219,0.1914,—,within fold noise
+rmse,XGBoost,persistence,46.9858,50.4422,-3.4564,4/5,5.4272,0.2275,—,within fold noise
+rmse,LSTM,persistence,48.0663,50.4422,-2.3759,4/5,4.0022,0.2551,—,within fold noise
+mae,XGBoost,LSTM,27.8862,29.6142,-1.728,4/5,3.7603,0.3622,—,within fold noise
+rmse,XGBoost,LSTM,46.9858,48.0663,-1.0805,4/5,4.5416,0.6229,—,within fold noise
+f1,XGB wtd+tuned,XGB unweighted,0.3767,0.3739,0.0028,3/5,0.0421,0.8891,—,within fold noise
