@@ -208,6 +208,26 @@ FEATURE_COLUMNS: tuple[str, ...] = tuple(
 )
 
 
+def encode_features(frame: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    """Categorical columns to integer codes, everything to float32.
+
+    Lives here rather than beside a model so that both the tree and the network
+    families can use it without either importing the other's dependencies --
+    PyTorch and XGBoost cannot share a process.
+
+    Integer codes rather than one-hot: the categoricals are low-cardinality
+    (four routes, six carriers, six departure bands). For the tree this is
+    exact. For the network it is a simplification -- codes imply an ordering
+    that does not exist, and learned embeddings would be the more principled
+    choice -- and it is recorded as such rather than hidden.
+    """
+    out = frame[list(cols)].copy()
+    for col in out.columns:
+        if str(out[col].dtype) in {"category", "object", "string", "bool"}:
+            out[col] = out[col].astype("category").cat.codes
+    return out.astype("float32")
+
+
 def assert_no_leaky_features(columns: list[str] | tuple[str, ...]) -> None:
     """Fail if a feature list contains a column derived from the target.
 

@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 
 from flightprice.config import RANDOM_SEED
+from flightprice.features.build import encode_features  # re-exported for notebook 04
 
 #: Untuned defaults, shared by every XGBoost fit so that differences between
 #: folds and routes reflect the data rather than the settings.
@@ -33,20 +34,6 @@ XGB_PARAMS: dict = {
     "n_jobs": 4,
     "random_state": RANDOM_SEED,
 }
-
-
-def encode_features(frame: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
-    """Categorical columns to integer codes, everything to float32.
-
-    Integer codes rather than one-hot: the categoricals here are low-cardinality
-    (four routes, six carriers) and trees split on codes without needing the
-    expanded representation.
-    """
-    out = frame[list(cols)].copy()
-    for col in out.columns:
-        if str(out[col].dtype) in {"category", "object", "string", "bool"}:
-            out[col] = out[col].astype("category").cat.codes
-    return out.astype("float32")
 
 
 def make_classifier(scale_pos_weight: float = 1.0, **overrides):
