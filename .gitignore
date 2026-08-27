@@ -29,6 +29,13 @@ venv/
 # --- Local tooling ------------------------------------------------------
 .claude/settings.local.json
 
+# --- Dissertation document ----------------------------------------------
+# Chapter drafts and the report itself stay local. The repository holds the
+# analysis and is a showcase artefact; the submitted document is not part of it.
+writeup/
+*.docx
+*.doc
+
 # --- Internal notes -----------------------------------------------------
 # Research-phase handover notes, kept local. Every methodological decision,
 # limitation and simplification they record is stated in README.md, which is
