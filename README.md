@@ -79,11 +79,13 @@ too small to learn from, which is not the situation here, and it would distort t
 ordering. Class weighting and decision-threshold tuning are used instead, measured against an
 unweighted baseline.
 
-**Validation.** Rolling-origin (walk-forward), five folds of 14 days, on the primary route.
-García Crespi et al. (2026) show model rankings can *reverse* between a single chronological
-split and rolling-origin validation on a structurally similar comparison, so a single split
-cannot support a "which model wins" claim. The secondary route uses a single chronological
-split, consistent with its lighter validation pass.
+**Validation.** Rolling-origin (walk-forward), five folds of 14 days, on **both route
+types**. García Crespi et al. (2026) show model rankings can *reverse* between a single
+chronological split and rolling-origin validation on a structurally similar comparison, so a
+single split cannot support a "which model wins" claim. The splitter is written once and
+reused across every model family, so applying it to the secondary route cost nothing; the
+lighter pass on BOS–LGA is a matter of **tuning depth only** (see Scope), not validation
+depth. The ten-cell comparisons in `07_significance_tests.csv` are 5 folds x 2 route types.
 
 Splits are taken on **departure date, not search date**. A single itinerary is searched
 repeatedly over weeks, so cutting on `searchDate` leaves 61.8% of test flights also present
