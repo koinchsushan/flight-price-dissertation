@@ -1,14 +1,24 @@
-"""XGBoost estimators and the naive baselines they are judged against.
+"""The XGBoost models, and the two "do nothing clever" baselines they must beat.
 
-A model's RMSE or F1 means little in isolation. Both tasks therefore carry a
-naive baseline that any useful model must beat:
+WHAT XGBOOST IS, IN ONE PARAGRAPH
+It builds a lot of small decision trees, one after another. Each new tree is
+trained to fix the mistakes the previous ones made. Individually the trees are
+weak; added together they are strong. It cannot use time order directly, which
+is why we hand-build features like "the fare last time we looked".
 
-- **Fare regression** — persistence, i.e. predict that the fare will be whatever
-  it was at the previous observation. Fares are step functions that hold flat
-  62% of the time (notebook 02), so persistence is a genuinely strong baseline
-  here, not a straw man.
-- **Spike classification** — predicting the positive class at its base rate,
-  which is what any classifier that has learnt nothing would achieve.
+WHY THE BASELINES MATTER
+An error of $47 sounds bad or good depending entirely on what you compare it
+against. So both tasks carry a deliberately dumb benchmark:
+
+  For predicting the fare -- PERSISTENCE. It simply guesses that tomorrow's
+  price equals today's. This sounds silly, but fares hold completely still 62%
+  of the time, so it is right far more often than not. It is a genuinely tough
+  benchmark, not a straw man set up to be knocked down -- and in this project it
+  actually BEAT XGBoost on average error in all ten rounds.
+
+  For predicting spikes -- THE BASE RATE. It always answers with the overall
+  spike rate and learns nothing at all. It scores an F1 of zero. That is the
+  floor any real model has to clear before it deserves attention.
 """
 
 from __future__ import annotations
@@ -19,8 +29,21 @@ import pandas as pd
 from flightprice.config import RANDOM_SEED
 from flightprice.features.build import encode_features  # re-exported for notebook 04
 
-#: Untuned defaults, shared by every XGBoost fit so that differences between
-#: folds and routes reflect the data rather than the settings.
+#: Settings shared by every XGBoost model in this project.
+#:
+#: These are sensible defaults, deliberately NOT tuned. Every model family here
+#: runs at sensible defaults, so the comparison is between the families
+#: themselves rather than between "the one I spent a weekend tuning" and the
+#: rest. It is written up as a limitation: any of the three would score better
+#: with effort spent on it.
+#:
+#: In plain terms:
+#:   n_estimators      how many trees to build (400)
+#:   max_depth         how many questions deep each tree may go (6)
+#:   learning_rate     how much each new tree is allowed to change the answer
+#:   subsample         each tree sees 80% of the rows, which prevents
+#:   colsample_bytree  and 80% of the columns -- memorising the training data
+#:   min_child_weight  refuse to split a branch covering fewer than 5 rows
 XGB_PARAMS: dict = {
     "n_estimators": 400,
     "max_depth": 6,
@@ -29,15 +52,21 @@ XGB_PARAMS: dict = {
     "colsample_bytree": 0.8,
     "min_child_weight": 5,
     "tree_method": "hist",
-    # A fixed thread count rather than -1, so the reported timings are
-    # reproducible and do not depend on what else the machine is running.
+    # Use exactly 4 processor cores, rather than "all of them". Fixing this
+    # means the timings quoted in the write-up are repeatable, instead of
+    # depending on whatever else the laptop happened to be doing at the time.
     "n_jobs": 4,
     "random_state": RANDOM_SEED,
 }
 
 
 def make_classifier(scale_pos_weight: float = 1.0, **overrides):
-    """Spike classifier. ``scale_pos_weight`` of 1.0 gives the unweighted baseline."""
+    """Build a spike-predicting model.
+
+    scale_pos_weight controls how seriously the model takes a missed spike:
+        1.0  treat both mistakes equally -- our unweighted version
+        12   treat one miss as being as bad as twelve false alarms
+    """
     import xgboost as xgb
 
     params = {**XGB_PARAMS, "eval_metric": "logloss", **overrides}
@@ -45,7 +74,7 @@ def make_classifier(scale_pos_weight: float = 1.0, **overrides):
 
 
 def make_regressor(**overrides):
-    """Fare regressor."""
+    """Build a fare-predicting model. Same settings, different goal."""
     import xgboost as xgb
 
     params = {**XGB_PARAMS, "eval_metric": "rmse", **overrides}
@@ -53,10 +82,14 @@ def make_regressor(**overrides):
 
 
 class PersistenceRegressor:
-    """Predict the previous observed fare.
+    """The "nothing will change" baseline: guess that the fare stays where it is.
 
-    The naive forecast for a series that mostly does not move. Implements the
-    minimal fit/predict interface the harness expects.
+    There is no learning here at all. It just repeats the last observed price.
+
+    It is written to look like a real model from the outside -- same .fit() and
+    .predict() -- so the testing harness can put it through exactly the same
+    process as XGBoost, with no special-casing. That is what makes the
+    comparison fair.
     """
 
     def __init__(self, lag_col: str = "fareLag1"):
@@ -64,6 +97,9 @@ class PersistenceRegressor:
         self._fallback = 0.0
 
     def fit(self, X: pd.DataFrame, y: np.ndarray) -> "PersistenceRegressor":
+        # Nothing to learn. We only note the average fare, to have something
+        # sensible to say on the very first observation of a flight, where there
+        # is no previous price to repeat.
         self._fallback = float(np.nanmean(y))
         return self
 
@@ -74,10 +110,11 @@ class PersistenceRegressor:
 
 
 class BaseRateClassifier:
-    """Predict the training base rate as a constant probability.
+    """The "learn nothing" baseline for spikes: always answer with the overall rate.
 
-    Gives the precision and recall a classifier achieves by learning nothing,
-    which is the floor the real models must clear.
+    If 8% of days are spikes, this says "8% chance" to every single day, forever.
+    It never commits to a yes, so it never catches a spike and scores an F1 of
+    zero. That zero is the floor. Any model worth reporting has to beat it.
     """
 
     def __init__(self):

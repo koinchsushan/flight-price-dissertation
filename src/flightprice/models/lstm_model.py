@@ -1,24 +1,34 @@
-"""LSTM over per-flight fare trajectories.
+"""The neural network model, which reads each flight's price history in order.
 
-**Do not import xgboost alongside this module.** PyTorch and XGBoost each bundle
-their own OpenMP runtime and loading both into one process aborts it on macOS,
-presenting as a kernel death with no traceback.
+WARNING BEFORE YOU RUN ANYTHING
+Never import xgboost in the same notebook as this file. Both libraries ship
+their own copy of a shared component, and loading both crashes the notebook on
+a Mac. The symptom is nasty: the kernel simply dies with no error message,
+usually nowhere near the line that caused it. This cost several hours to
+diagnose. That is why the LSTM has a notebook to itself.
 
-The unit here is a *sequence*: one itinerary (`legId`) observed across successive
-search dates, in order. This is a third granularity, distinct from XGBoost's
-independent rows and SARIMA's daily route series, and it is the one an LSTM
-exists for -- feeding it the same flattened rows a tree sees would discard the
-sequential structure that motivates the architecture at all.
+WHAT AN LSTM IS, IN PLAIN TERMS
+Long Short-Term Memory. It is a neural network built to read things in order and
+carry a running memory as it goes, like reading a sentence one word at a time
+while remembering the beginning. Here the "sentence" is one flight's price
+history: $312, $312, $340, $340, $389...
 
-The model is many-to-many: at step *t* it emits a prediction for step *t*, having
-seen steps *0…t*. That is legitimate because the features are already causal --
-`fareLag1`, `zLag1`, the rolling statistics and the calendar terms are all known
-before the fare at *t* is observed (see :mod:`flightprice.features.build`). The
-recurrent state adds trajectory history to that, which is precisely the extra
-information the family is being tested for.
+WHY IT NEEDS DIFFERENT INPUT TO XGBOOST
+XGBoost sees each row on its own, with no idea which rows belong together.
+This model sees a whole flight at once, in date order. That memory is the entire
+point of the architecture. Feeding it the same disconnected rows a tree gets
+would throw away the one thing it can do that a tree cannot -- and then the
+comparison would not be testing what we claim it tests.
 
-Comparability with XGBoost is preserved deliberately: the same 32 features, the
-same folds, the same metrics. Only the model differs.
+IS IT ALLOWED TO SEE THE ANSWER?
+No, and this is worth being ready to defend. It reads the history up to and
+including today, and predicts today. That is legitimate because every feature it
+receives was already shifted back in time when it was built (fareLag1 is
+yesterday's fare, and so on). The memory adds knowledge of the flight's PAST.
+It never sees today's fare.
+
+WHAT IS KEPT IDENTICAL FOR FAIRNESS
+Same 32 features, same five rounds, same scoring. Only the model differs.
 """
 
 from __future__ import annotations
@@ -33,7 +43,12 @@ from flightprice.evaluation.splitting import Fold
 
 
 def select_device():
-    """Prefer Apple MPS, then CUDA, then CPU."""
+    """Pick the fastest available hardware to train on.
+
+    MPS is the graphics chip in Apple Silicon Macs, CUDA is an NVIDIA graphics
+    card, and CPU is the ordinary processor -- correct but far slower. On the
+    machine used for this project it selects MPS.
+    """
     import torch
 
     if torch.backends.mps.is_available():
@@ -50,11 +65,19 @@ def build_sequences(
     group_col: str = "legId",
     time_col: str = "searchDate",
 ) -> tuple[list[np.ndarray], list[np.ndarray]]:
-    """Split a frame into one ordered array per flight.
+    """Regroup the data from a flat table into one block per flight.
+
+    Before: 800,000 rows in a table, in no meaningful order.
+    After:  63,000 separate little blocks, one per flight, each holding that
+            flight's prices in date order.
+
+    This is the shape a sequence model needs. The trick used to do the splitting
+    is worth knowing: rather than looping over 63,000 flights, we number the
+    flights, then find every point where that number changes. Those points are
+    the boundaries, and numpy can cut the whole table at all of them at once.
 
     Returns:
-        ``(features_per_flight, targets_per_flight)``, ordered by search date
-        within each flight.
+        Two lists -- the features per flight, and the answers per flight.
     """
     ordered = frame.sort_values([group_col, time_col])
     features = encode_features(ordered, list(feature_cols)).to_numpy(dtype="float32")
@@ -76,12 +99,28 @@ def make_batches(
     shuffle: bool,
     rng: np.random.Generator | None = None,
 ):
-    """Yield padded batches with a validity mask.
+    """Hand the model flights in batches, padded to a common length.
 
-    Sequences are sorted by length before batching so that each batch contains
-    similar lengths, which keeps padding -- and therefore wasted computation and
-    memory -- to a minimum. Only the batch currently in use is ever materialised
-    as a dense array.
+    THE PROBLEM
+    The model wants to process many flights at once for speed, but that needs
+    them to be rectangular -- all the same length. Real flights are not: one has
+    9 prices, another has 30.
+
+    THE FIX, CALLED PADDING
+    Stretch every flight in the batch to match the longest one, filling the gaps
+    with zeros, and keep a separate "mask" recording which entries are real:
+
+        flight A (3 prices):  312  340  389   0    0     mask: 1 1 1 0 0
+        flight B (5 prices):  145  145  160  180  210    mask: 1 1 1 1 1
+
+    The mask is essential. Without it the model would be rewarded for correctly
+    predicting the fake zeros, which is most of a short flight's row.
+
+    ONE EFFICIENCY TRICK
+    Flights are sorted by length before batching, so each batch holds flights of
+    similar length. Otherwise a batch containing one 30-price flight and forty
+    9-price flights would be mostly padding -- wasted memory and wasted
+    computation.
     """
     import torch
 
@@ -110,13 +149,18 @@ def make_batches(
 
 
 def build_model(n_features: int, hidden_size: int = 64, num_layers: int = 1, dropout: float = 0.1):
-    """A deliberately small recurrent model.
+    """Build the network. Deliberately small, and that is a defensible choice.
 
-    One or two layers of 64 units. The architecture is kept modest because the
-    comparison is between *families*, not between a tuned network and untuned
-    competitors -- XGBoost and SARIMA are also run at sensible defaults, and an
-    extensively tuned LSTM set against them would not answer the question the
-    dissertation asks.
+    One layer of 64 memory units, then a dropout step, then a single output.
+
+    Why so modest? Because the dissertation compares model FAMILIES. XGBoost and
+    SARIMA are both run at sensible untuned defaults, so tuning this one heavily
+    would be comparing "a network somebody worked hard on" against "two models
+    nobody touched". That would answer a different question than the one asked.
+
+    "Dropout" randomly ignores a fraction of the network during training. It
+    sounds destructive, and it is: it stops the model leaning too heavily on any
+    one path, which helps it cope with data it has not seen before.
     """
     import torch
     from torch import nn
@@ -154,11 +198,15 @@ def train_model(
     pos_weight: float | None = None,
     verbose: bool = True,
 ):
-    """Train on padded batches, ignoring padded positions in the loss.
+    """Train the network by showing it the data repeatedly and correcting it.
 
-    The mask matters: without it the model would be rewarded for predicting
-    zeros in the padding, which is most of a short sequence in a batch of longer
-    ones.
+    Each pass over all the data is called an epoch, and we do eight. Each pass:
+    make predictions, measure how wrong they were, nudge the internal settings
+    slightly in the direction that would have been less wrong, repeat.
+
+    The mask from make_batches is applied to the error, so the padding zeros are
+    ignored. Without it the model would be scored on -- and would learn to
+    reproduce -- entries that do not exist.
     """
     import torch
     from torch import nn
@@ -179,12 +227,16 @@ def train_model(
         for x, y, mask in make_batches(sequences, targets, batch_size, shuffle=True, rng=rng):
             x, y, mask = x.to(device), y.to(device), mask.to(device)
 
-            optimiser.zero_grad()
-            loss_matrix = loss_fn(model(x), y) * mask
-            loss = loss_matrix.sum() / mask.sum().clamp(min=1.0)
-            loss.backward()
+            # The five steps of training, in order:
+            optimiser.zero_grad()                    # 1. forget the last correction
+            loss_matrix = loss_fn(model(x), y) * mask  # 2. how wrong were we? (x0 on padding)
+            loss = loss_matrix.sum() / mask.sum().clamp(min=1.0)  # 3. average over REAL entries only
+            loss.backward()                          # 4. work out which way to adjust
+            # Cap the size of any single adjustment. Occasionally one batch
+            # produces a huge correction that wrecks everything learned so far
+            # (known as "exploding gradients"). This keeps training stable.
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimiser.step()
+            optimiser.step()                         # 5. apply the adjustment
 
             total += float(loss.item()) * float(mask.sum())
             counted += float(mask.sum())
@@ -196,7 +248,12 @@ def train_model(
 
 
 def predict(model, sequences, targets, device, batch_size: int = 512) -> tuple[np.ndarray, np.ndarray]:
-    """Predict over sequences, returning only the non-padded positions."""
+    """Make predictions, then throw away the padding before scoring.
+
+    The model produces an answer for every slot including the fake padded ones.
+    The mask tells us which are real, and only those are returned -- otherwise
+    the scores would be diluted by predictions about entries that do not exist.
+    """
     import torch
 
     model.eval()
@@ -215,23 +272,34 @@ def predict(model, sequences, targets, device, batch_size: int = 512) -> tuple[n
 def standardise(
     train_seqs: list[np.ndarray], test_seqs: list[np.ndarray], clip: float = 4.0
 ):
-    """Standardise features on training statistics, then clip to that range.
+    """Put every feature on a common scale, and cap extreme values.
 
-    Fitting the scaler on all data would leak the test distribution into
-    training, so the statistics come from the training window only. Constant
-    columns are left alone rather than dividing by zero.
+    WHY RESCALE AT ALL
+    Neural networks struggle when one input is measured in hundreds (fares) and
+    another in single digits (day of week). Rescaling puts them all on a
+    comparable footing. The scale is measured from the TRAINING data only --
+    measuring it on everything would let information about the test period seep
+    into training.
 
-    **The clip is not cosmetic.** Several features index time -- `weekOfYear`,
-    `month`, `observationIndex` -- and rolling-origin validation guarantees the
-    test window sits *later* than everything the scaler saw. Their standardised
-    values therefore land beyond the training range by construction. A tree is
-    unaffected, since an unseen-but-larger value simply falls in the terminal
-    bin, but a network extrapolates linearly and carries the fare with it:
-    measured on short-haul fold 1, the unclipped model predicted a mean fare of
-    238.6 dollars against an actual 148.7, while fitting the training window
-    almost exactly. Clipping to ±4 standard deviations bounds the extrapolation without
-    discarding the features, keeping the feature set identical to the one the
-    other families use.
+    WHY THE CAP MATTERS, AND THIS IS THE INTERESTING BIT
+    Some features are essentially counters that only go up: week of the year,
+    month, how many times this flight has been priced. And our test period is
+    always LATER than our training period. So test values are guaranteed to sit
+    beyond anything the model saw while learning -- week 41 when it only ever
+    trained up to week 38.
+
+    A decision tree shrugs at this. It asks "is this bigger than 38?", and the
+    answer is simply yes. A neural network does not shrug: it draws a straight
+    line through what it saw and extends it, and drags its fare prediction along
+    for the ride.
+
+    We measured the damage. Without the cap, on the short route in round 1, the
+    model predicted an average fare of $238.60 when the real figure was $148.70
+    -- while fitting the training period almost perfectly. It was not confused;
+    it was confidently extrapolating off the end of the world.
+
+    Capping at 4 standard deviations stops that, without dropping the features
+    and without changing the feature set the other models get.
     """
     stacked = np.concatenate(train_seqs, axis=0)
     mean = stacked.mean(axis=0)
@@ -259,11 +327,15 @@ def evaluate_lstm_folds(
     label: str = "lstm",
     verbose: bool = True,
 ) -> pd.DataFrame:
-    """Train and score an LSTM across folds, matching the other families' protocol.
+    """Run the LSTM through the same five rounds as everything else.
 
-    A fresh model is trained per fold. Features are standardised on training
-    statistics only, and NaNs -- which a tree tolerates but a network does not --
-    are filled with the training mean via the same statistics.
+    A brand new model is trained for each round, so no round can benefit from
+    having already seen a later round's data.
+
+    Two preparation steps happen here that XGBoost does not need, both because a
+    network is fussier than a tree: filling in missing values, and rescaling.
+    Both are worked out from the training half only. See standardise() above,
+    which explains the one that genuinely changed the results.
     """
     import torch
 
@@ -279,18 +351,26 @@ def evaluate_lstm_folds(
         train_x, train_y = build_sequences(train_frame, feature_cols, target_col)
         test_x, test_y = build_sequences(test_frame, feature_cols, target_col)
 
-        # A network cannot ingest NaN. Fill from training statistics only.
+        # Gaps in the data must be filled before the network sees them: a tree
+        # copes with a missing value, a network produces nonsense. We fill with
+        # the average of the TRAINING data only -- using the overall average
+        # would smuggle information about the test period into training.
         column_means = np.nanmean(np.concatenate(train_x, axis=0), axis=0)
         column_means = np.nan_to_num(column_means)
         fill = lambda seqs: [np.where(np.isnan(s), column_means, s).astype("float32") for s in seqs]
         train_x, test_x = fill(train_x), fill(test_x)
         train_x, test_x = standardise(train_x, test_x)
 
-        # Standardise the regression target on training statistics. A network
-        # initialised near zero, trained under a bounded-gradient loss, converges
-        # impossibly slowly towards a target in the hundreds -- it is an artefact
-        # of scale, not of the architecture, and leaving it in would handicap the
-        # family relative to the trees, which are scale-invariant.
+        # Rescale the thing we are predicting, too, and then undo it afterwards.
+        #
+        # A fresh network starts out guessing near zero. Asked to reach $400 in
+        # small careful steps, it takes an age to get there and looks far worse
+        # than it is. That is a units problem, not a modelling one -- trees do
+        # not care about scale at all, so leaving it in would unfairly handicap
+        # the network in a comparison that is supposed to be about the models.
+        #
+        # So we train it on rescaled fares and convert the predictions back to
+        # pounds and dollars before scoring. All reported numbers are real fares.
         target_mean, target_std = 0.0, 1.0
         if task == "regression":
             stacked = np.concatenate(train_y)

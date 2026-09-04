@@ -1,26 +1,40 @@
-"""Time-aware train/test splitting for the model comparison.
+"""Splitting the data into training and testing sets, without cheating.
 
-Random k-fold cross-validation is invalid here. It would place later
-observations in training and earlier ones in test, letting a model learn from
-the future and returning scores that could not be reproduced in deployment.
+WHY NOT JUST SPLIT AT RANDOM?
+The usual machine learning approach shuffles the rows and deals out 80/20. That
+is wrong for anything involving time. Shuffling puts October prices into the
+training set and August prices into the test set, so the model gets to peek at
+the future. The score would look great and would be impossible to repeat in
+real life, where the future has not happened yet.
 
-Two schemes are provided:
+WHAT WE DO INSTEAD (rolling_origin_splits)
+Train on everything up to a date, then test on the next two weeks. Slide the
+date forward and repeat. We do this five times, so we get five scores instead
+of one. Five scores tell us whether a model is genuinely better or just got
+lucky on one lucky fortnight.
 
-- :func:`rolling_origin_splits` — walk-forward validation. The training window
-  grows (or slides) and the test window advances, giving one score per fold
-  instead of a single point estimate. Preferred: García Crespi et al. (2026)
-  found model rankings can *reverse* between a single split and rolling-origin
-  on a structurally comparable three-way comparison, so a single split cannot
-  support a claim about which model family wins.
-- :func:`chronological_split` — one cut date. Cheaper, and adequate for the
-  secondary route's lighter validation pass.
+WHY FIVE ROUNDS AND NOT ONE
+Garcia Crespi et al. (2026) ran the same comparison both ways and found that
+which model "won" actually flipped depending on the method. One split simply
+cannot support a claim about which model is best.
 
-**Splits are taken on departure date, not search date.** A single itinerary
-(`legId`) is searched repeatedly over weeks, so cutting on `searchDate` leaves
-the same flight on both sides of the boundary — measured at 61.8% of test
-flights on this dataset. The model would then be scored partly on flights whose
-fare history it had already memorised. Cutting on `flightDate` keeps every
-trajectory wholly in one side, and :func:`assert_no_group_leakage` verifies it.
+THE SUBTLE TRAP: WHICH DATE DO WE SPLIT ON?
+This is the part worth understanding properly, because it does not look like
+cheating at first glance.
+
+Every flight is priced over and over across several weeks. So each flight has
+TWO kinds of date attached to it:
+    searchDate  - the day we looked the price up
+    flightDate  - the day the plane actually departs
+
+If we split on searchDate, one single flight ends up on BOTH sides of the line:
+some of its prices land in training, the rest in testing. We measured this --
+61.8% of test flights would also be sitting in the training data. The model
+would be marked on flights it had already memorised.
+
+Splitting on flightDate keeps a whole flight, and its whole price history,
+entirely on one side. assert_no_group_leakage() below checks this actually
+happened, and it is run before every single model is fitted.
 """
 
 from __future__ import annotations
@@ -33,11 +47,12 @@ import pandas as pd
 
 @dataclass(frozen=True)
 class Fold:
-    """One train/test division.
+    """One round of training and testing: which rows go where, and over what dates.
 
-    ``train_mask`` and ``test_mask`` are boolean arrays aligned to the row order
-    of the frame the fold was built from, so ``df[fold.train_mask]`` works
-    whatever the frame's index looks like.
+    train_mask and test_mask are simple True/False lists, one entry per row of
+    the data. True means "this row belongs to this side". Using True/False lists
+    rather than row numbers means df[fold.train_mask] just works, no matter how
+    the data happens to be indexed.
     """
 
     index: int
@@ -73,31 +88,41 @@ def rolling_origin_splits(
     train_days: int | None = None,
     min_train_days: int = 30,
 ) -> list[Fold]:
-    """Build walk-forward folds over departure dates.
+    """Build the five rounds of training and testing.
 
-    Test windows tile the end of the observation period backwards, so the final
-    fold tests on the most recent data available and each earlier fold steps
-    back by ``test_days``.
+    Picture the calendar as a line. We take the last ten weeks and chop them
+    into five two-week test blocks. Each round trains on everything before its
+    block and is tested on the block itself:
+
+        round 1:  train |============|  test [##]
+        round 2:  train |===============|  test [##]
+        round 3:  train |==================|  test [##]
+        round 4:  train |=====================|  test [##]
+        round 5:  train |========================|  test [##]
+
+    Training data grows each round, which mirrors real life: the longer a
+    service runs, the more history it has to learn from.
 
     Args:
-        df: Observations to split.
-        n_splits: Number of folds.
-        test_days: Length of each test window, in days.
-        date_col: Date column defining the timeline. Defaults to departure date
-            — see the module docstring for why this matters.
-        gap_days: Optional embargo between the end of training and the start of
-            testing. Not required when splitting on departure date, since whole
-            trajectories already fall on one side, but available if a feature is
-            later added that looks across departures.
-        train_days: If given, training uses a sliding window of this many days
-            rather than expanding from the start of the data.
-        min_train_days: Raise if the earliest fold would train on less than this.
+        df: The data to split up.
+        n_splits: How many rounds. We use 5.
+        test_days: How long each test block is, in days. We use 14.
+        date_col: Which date defines the timeline. Departure date -- see the
+            note at the top of this file for why that choice matters so much.
+        gap_days: Optional dead zone between the end of training and the start
+            of testing. We leave it at 0, because splitting on departure date
+            already keeps whole flights on one side. It is here in case a
+            feature is ever added that looks across different departures.
+        train_days: If set, train on a sliding window of this many days instead
+            of everything from the beginning. We do not use this.
+        min_train_days: Refuse to run if the first round would have less than
+            this much training data. A guard against a silly configuration.
 
     Returns:
-        Folds ordered earliest first.
+        The rounds, earliest first.
 
     Raises:
-        ValueError: If the requested layout does not fit the data.
+        ValueError: If the requested layout does not fit inside the data.
     """
     if n_splits < 1:
         raise ValueError("n_splits must be at least 1")
@@ -107,7 +132,9 @@ def rolling_origin_splits(
     dates = pd.to_datetime(df[date_col])
     start, end = dates.min(), dates.max()
 
-    # Test windows occupy the final n_splits * test_days days.
+    # Work backwards from the last date in the data. Five blocks of 14 days
+    # means the test blocks together occupy the final 70 days; everything
+    # before that is available for training.
     span_needed = pd.Timedelta(days=n_splits * test_days + gap_days)
     first_test_start = end + pd.Timedelta(days=1) - pd.Timedelta(days=n_splits * test_days)
 
@@ -159,15 +186,15 @@ def chronological_split(
     date_col: str = "flightDate",
     gap_days: int = 0,
 ) -> Fold:
-    """Split once at a cut date, training before it and testing after.
+    """The simpler alternative: cut the calendar once, train before, test after.
 
-    The cut is placed at the ``1 - test_fraction`` quantile of *distinct dates*,
-    not of rows, so an unusually busy departure date cannot drag the boundary.
+    The cut is placed by counting distinct DATES rather than rows. If we counted
+    rows, one unusually busy departure date could drag the boundary sideways.
 
-    This is the fallback scheme. Where it is used instead of
-    :func:`rolling_origin_splits`, say so explicitly in the write-up and give
-    the reason — it yields a single point estimate with no measure of whether a
-    model's advantage is consistent or an artefact of the cut date.
+    This is a fallback and the final project does not use it. It gives a single
+    score with no way of telling whether a model's lead is consistent or just an
+    accident of where the line happened to fall. Kept here because the write-up
+    discusses why it was rejected.
     """
     if not 0 < test_fraction < 1:
         raise ValueError("test_fraction must lie strictly between 0 and 1")
@@ -194,21 +221,27 @@ def chronological_split(
 def assert_no_group_leakage(
     df: pd.DataFrame, folds: list[Fold] | Fold, group_col: str = "legId"
 ) -> None:
-    """Verify no trajectory appears in both sides of any fold.
+    """Safety check: make sure no single flight appears in both training and testing.
 
-    Cheap to run and worth running: this is the failure mode that would quietly
-    inflate every score in the comparison.
+    This is the guard against the trap described at the top of this file. It is
+    fast, and it runs before every model is fitted, because this is the mistake
+    that would quietly inflate every score in the project without ever throwing
+    an error of its own.
+
+    It has been tested by deliberately feeding it a bad split, to confirm it
+    actually refuses rather than just sitting there looking reassuring.
 
     Raises:
-        AssertionError: If any group spans a fold's train and test sets.
+        AssertionError: If any flight has rows on both sides.
     """
     if isinstance(folds, Fold):
         folds = [folds]
 
-    # Factorised to integer codes once. The identifiers are strings, and
-    # intersecting hundreds of thousands of them directly is both slow and
-    # memory-hungry -- this guard runs before every fit, so its cost matters.
-    # Reducing to unique codes first shrinks each side by roughly 16x.
+    # Flight IDs are long strings. Comparing hundreds of thousands of strings is
+    # slow and eats memory, and this check runs before every single fit, so the
+    # cost adds up. pd.factorize swaps each unique string for a plain number
+    # (a -> 0, b -> 1, ...), which makes the comparison roughly 16x smaller.
+    # The numbers are only used for this comparison and thrown away after.
     codes = pd.factorize(df[group_col], sort=False)[0]
     for fold in folds:
         train_ids = np.unique(codes[fold.train_mask])
@@ -227,11 +260,14 @@ def describe_folds(
     label_col: str | None = "isSpikeEvent",
     group_col: str | None = "legId",
 ) -> pd.DataFrame:
-    """Tabulate fold sizes, date ranges and positive-class balance.
+    """Build a readable table of what each round contains.
 
-    Worth printing in the notebook before any model is fitted: a fold whose test
-    window carries very few positives will produce an unstable F1 that should
-    not be averaged in uncritically.
+    Worth printing before fitting anything. The number to look at is how many
+    spikes land in each test block. A block with very few would give a wobbly,
+    unreliable score that should not be quietly averaged in with the others.
+
+    In this project every block held between 9,600 and 12,200 spikes, so that
+    concern did not apply -- but it was checked rather than assumed.
     """
     if isinstance(folds, Fold):
         folds = [folds]

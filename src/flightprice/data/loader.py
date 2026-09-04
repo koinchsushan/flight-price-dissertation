@@ -1,8 +1,13 @@
-"""Loading and first-pass cleaning of the four-route flight-price subset.
+"""Loading the data and doing the first round of cleaning.
 
-The full 82 M-row / 31 GB source file is never touched here -- everything reads
-from the pre-extracted subset (see ``data/README.md``), which fits comfortably in
-memory on a normal machine.
+A NOTE ON FILE SIZES, WHICH SHAPED THE WHOLE PROJECT
+The original dataset is 82 million rows and 31 GB. Nothing here ever opens that
+file. Trying to load it normally runs out of memory -- confirmed, not assumed,
+including on hosted machines with more memory than a laptop.
+
+What we work from instead is a pre-extracted slice covering just our four
+routes: 2.1 million rows, about 662 MB, which opens fine in the ordinary way.
+data/README.md explains how that slice was produced.
 """
 
 from __future__ import annotations
@@ -51,15 +56,18 @@ def load_raw(
     path: Path | str = RAW_SUBSET,
     columns: tuple[str, ...] | None = MODELLING_COLUMNS,
 ) -> pd.DataFrame:
-    """Read the four-route subset from CSV.
+    """Read the data file, with the two date columns converted into real dates.
+
+    Nothing is filtered here -- this is the raw data as it comes.
 
     Args:
-        path: Location of the subset CSV.
-        columns: Columns to read. Pass ``None`` to read all 27.
+        path: Where the file is.
+        columns: Which columns to read. Reading only what is needed keeps
+            memory down. Pass None to read all 27.
 
     Returns:
-        The raw frame, with ``searchDate`` and ``flightDate`` parsed as
-        datetimes and no rows filtered.
+        The data, with searchDate and flightDate as proper dates rather than
+        text, so that date arithmetic works.
     """
     path = Path(path)
     if not path.exists():
@@ -82,15 +90,20 @@ def load_raw(
 
 
 def filter_coach_only(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
-    """Keep only itineraries that are coach class on every segment.
+    """Keep economy-class tickets only, and drop everything else.
 
-    Business, first, premium and mixed-cabin itineraries make up 0.17% of the
-    subset but occupy the extreme tail of the fare distribution, which would
-    otherwise dominate both the spike definition and the regression targets.
+    WHY, WITH THE NUMBERS
+    Business and first class tickets are only 0.17% of the data -- about 3,700
+    rows out of 2.15 million -- but they sit right at the top of the price range
+    and would distort everything downstream.
+
+    Removing them drops the highest fare from $4,782.60 to $2,281.61, while the
+    middle fare does not move by a single cent. That pair of facts is the
+    justification: we removed a thin tail, not a chunk of the actual data.
 
     Args:
-        df: Frame containing a ``segmentsCabinCode`` column.
-        verbose: Print how many rows were removed.
+        df: The data, which must have the cabin-class column.
+        verbose: Print how many rows were dropped.
 
     Returns:
         A filtered copy.
@@ -113,10 +126,11 @@ def filter_coach_only(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
 
 
 def add_route(df: pd.DataFrame) -> pd.DataFrame:
-    """Add a directional ``route`` column, e.g. ``"JFK-LAX"``.
+    """Add a single "route" column, like "JFK-LAX", built from the two airport codes.
 
-    Directional rather than symmetric: JFK->LAX and LAX->JFK price differently
-    and are treated as separate series throughout.
+    Direction is kept separate on purpose. JFK-to-LAX and LAX-to-JFK are treated
+    as two different routes throughout the project, because they genuinely price
+    differently -- demand is not symmetric.
     """
     out = df.copy()
     out["route"] = (
@@ -132,9 +146,10 @@ def load_clean(
     columns: tuple[str, ...] | None = MODELLING_COLUMNS,
     verbose: bool = True,
 ) -> pd.DataFrame:
-    """Load the subset, apply the coach-only filter and add ``route``.
+    """Do all three loading steps in one call: read, filter to economy, add route.
 
-    This is the standard entry point for every downstream notebook.
+    This is the one function the notebooks actually call. Everything above is a
+    step it runs on your behalf.
     """
     df = load_raw(path, columns)
     if verbose:

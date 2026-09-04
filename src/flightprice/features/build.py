@@ -1,25 +1,32 @@
-"""Feature construction for fare regression and spike classification.
+"""Building the 32 pieces of information the models learn from.
 
-**The governing constraint is what is knowable at prediction time.** Research
-question 2 asks whether a spike can be predicted *before* it happens, so the
-prediction is made standing at observation *t-1* and asking about *t*. That
-divides the columns three ways:
+THE ONE RULE THAT GOVERNS EVERYTHING HERE
+Only use information we would genuinely have at the moment of predicting.
 
-*Known about t* — calendar facts fixed the moment the flight was scheduled:
-booking horizon, day of week, holiday proximity, season.
+Picture standing on one day, looking at tomorrow, and asking "is the price about
+to jump?" Anything we could not possibly know while standing there is off
+limits. That single rule sorts every column in the dataset into four buckets:
 
-*Static per itinerary* — route, stops, airline, departure time of day, duration,
-distance, fare flags. Constant along a trajectory, so no timing issue arises.
+1. KNOWN IN ADVANCE - fixed the moment the flight was scheduled.
+   How far ahead we are booking, the day of the week, whether it is near a
+   public holiday, whether it is summer. All fine to use.
 
-*Observed, and therefore lagged* — `totalFare` and `seatsRemaining` at *t* are
-not available when the prediction is made. They enter only as values from *t-1*
-and earlier. Rolling statistics are already causal by construction (see
-:mod:`flightprice.spikes.labelling`).
+2. FIXED FOR THE WHOLE FLIGHT - route, number of stops, airline, departure
+   time, journey length. These never change, so there is no timing problem.
 
-*Forbidden* — `totalFare` and `baseFare` at *t*, and anything derived from them
-(`spikeZ`, `isSpike`). The label is a function of `totalFare` at *t*, so
-including it leaks the answer directly. :func:`assert_no_leaky_features` guards
-against this and should be called before every fit.
+3. YESTERDAY'S NUMBERS - the fare and the seats left are things we observe.
+   Tomorrow's values are not available today, so they only ever enter as
+   yesterday's values ("lagged"). fareLag1 means "the fare last time we looked".
+
+4. BANNED - the fare on the day being predicted, and anything built from it.
+   This is the important one. The spike label is calculated directly FROM the
+   fare, so handing the model that fare is handing it the answer.
+
+HOW BADLY DOES BREAKING RULE 4 MATTER?
+We measured it. Including the fare pushes the score from 0.815 to 0.997 -- from
+"decent" to "basically perfect". A score that good on a problem this hard is not
+success, it is a warning light. assert_no_leaky_features() below refuses to run
+if any banned column appears, and it is called before every fit.
 """
 
 from __future__ import annotations
@@ -29,18 +36,22 @@ import pandas as pd
 
 from flightprice.config import SUMMER_END, SUMMER_START, US_HOLIDAYS_2022
 
-#: Columns that must never be used as predictors. The classification label is
-#: derived from ``totalFare`` at the observation being predicted, so these leak
-#: the answer. ``baseFare`` is ``totalFare`` less taxes and leaks just as badly.
+#: The banned list. Never let a model see any of these.
+#: The spike label is worked out from totalFare, so totalFare gives the game
+#: away. baseFare is just totalFare minus taxes, so it gives it away too. The
+#: rest are all calculated from the fare, so the same applies to them.
 LEAKY_COLUMNS: frozenset[str] = frozenset(
     {"totalFare", "baseFare", "spikeZ", "isSpike", "isSpikeEvent", "isLabelable"}
 )
 
 
 def parse_travel_duration(series: pd.Series) -> pd.Series:
-    """Convert ISO-8601 durations such as ``"PT8H47M"`` to whole minutes.
+    """Turn a journey length like "PT8H47M" into a plain number of minutes (527).
 
-    Handles hours-only (``"PT5H"``) and minutes-only (``"PT47M"``) forms.
+    The dataset stores journey times in a standard but unfriendly format:
+    PT = "period of time", then hours and minutes. We pull the digits before
+    the H and before the M and do the arithmetic. Some entries have only hours
+    ("PT5H") or only minutes ("PT47M"), so a missing piece counts as zero.
     """
     text = series.astype("string")
     hours = text.str.extract(r"(\d+)H", expand=False).astype("Float64").fillna(0)
@@ -49,10 +60,10 @@ def parse_travel_duration(series: pd.Series) -> pd.Series:
 
 
 def add_calendar_features(df: pd.DataFrame, date_col: str = "flightDate") -> pd.DataFrame:
-    """Add day-of-week, month, holiday and season features for the departure.
+    """Add calendar facts about the departure day: weekday, month, holidays, season.
 
-    All of these are knowable in advance — they depend only on the departure
-    date, not on anything observed during the booking window.
+    Everything here comes from the departure date alone. Nothing depends on what
+    happened while the flight was on sale, so it is all safely known in advance.
     """
     out = df.copy()
     dates = out[date_col]
@@ -65,9 +76,19 @@ def add_calendar_features(df: pd.DataFrame, date_col: str = "flightDate") -> pd.
     holidays = pd.to_datetime(sorted(US_HOLIDAYS_2022))
     out["isHoliday"] = dates.isin(holidays)
 
-    # Signed distance to the nearest in-window federal holiday. Fare effects
-    # straddle a holiday rather than landing only on the day itself, so the
-    # distance carries more signal than the flag alone.
+    # How many days away is the nearest public holiday? Negative means before.
+    #
+    # Why not just a yes/no "is it a holiday" flag? Because holiday pricing
+    # spreads out around the date -- fares climb in the days leading up to it
+    # and fall away after. "Three days before Independence Day" is useful;
+    # "not a holiday" throws that away.
+    #
+    # The three lines below are a compact way of doing this for 1.9 million
+    # rows at once, which is why they look dense:
+    #   1. turn both sets of dates into plain day-numbers so we can subtract
+    #   2. build a grid of every departure against every holiday and subtract,
+    #      giving the distance from each flight to each of the four holidays
+    #   3. for each flight, keep whichever of the four is closest
     departure_days = dates.to_numpy("datetime64[D]").astype("int64")
     holiday_days = holidays.to_numpy("datetime64[D]").astype("int64")
     deltas = departure_days[:, None] - holiday_days[None, :]
@@ -81,12 +102,16 @@ def add_calendar_features(df: pd.DataFrame, date_col: str = "flightDate") -> pd.
 
 
 def add_itinerary_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Add features fixed for the whole trajectory: airline, timing, duration.
+    """Add facts about the flight itself: airline, departure time, journey length.
 
-    ``segmentsAirlineName`` and ``segmentsDepartureTimeRaw`` hold one entry per
-    leg joined by ``||``. The operating carrier of the first leg and the
-    scheduled departure time of the first leg are the relevant summaries; a
-    flag records whether one carrier operates the whole itinerary.
+    These never change across a flight's price history, so there is no timing
+    worry with any of them.
+
+    One quirk of the data to know about: a journey with a connection stores its
+    legs in a single cell, separated by "||". So a two-leg trip might read
+    "Delta||Delta". We take the first leg's airline and the first leg's
+    departure time, and separately record whether the whole trip is flown by
+    one carrier or involves a handover between two.
     """
     out = df.copy()
 
@@ -97,9 +122,13 @@ def add_itinerary_features(df: pd.DataFrame) -> pd.DataFrame:
         lambda parts: len(set(parts)) == 1 if isinstance(parts, list) else True
     )
 
-    # Local scheduled departure time of the first leg. The raw value carries a
-    # UTC offset, so the hour is read from the string rather than converted --
-    # what matters commercially is the local clock time of the flight.
+    # Departure hour, read straight out of the text rather than converted.
+    #
+    # The stored time already carries a timezone offset. If we let the computer
+    # "helpfully" convert it, an 8am flight from New York and an 8am flight from
+    # Los Angeles would end up as different numbers. What matters for pricing is
+    # what the clock says where the passenger is standing, so we take characters
+    # 11 and 12 of the text, which is where the hour sits.
     raw = out["segmentsDepartureTimeRaw"].astype("string")
     out["departureHour"] = raw.str.slice(11, 13).astype("Int8")
     out["departureTimeOfDay"] = pd.cut(
@@ -118,17 +147,19 @@ def add_lagged_features(
     group_col: str = "legId",
     time_col: str = "searchDate",
 ) -> pd.DataFrame:
-    """Add lagged fares and seat counts, plus momentum derived from them.
+    """Add "what the price was doing recently" features.
 
-    Every column produced here is shifted by at least one observation, so none
-    of it depends on the observation being predicted.
+    "Lagged" simply means shifted back in time. fareLag1 is the fare the last
+    time we looked, fareLag2 the time before that, and so on. Every single
+    column built here is shifted back at least one step, which is what keeps
+    the rule at the top of this file intact.
 
     Args:
-        df: Frame carrying ``totalFare``, ``seatsRemaining`` and the rolling
-            statistics from the spike-labelling step.
-        lags: Which lags of the fare to add.
-        group_col: Trajectory identifier.
-        time_col: Ordering column within a trajectory.
+        df: Data carrying the fare, the seats left, and the rolling average
+            and spread worked out during spike labelling.
+        lags: How many steps back to go. We use 1, 2 and 3.
+        group_col: The column identifying one flight.
+        time_col: The column used to put a flight's prices in order.
     """
     out = df.sort_values([group_col, time_col]).reset_index(drop=True)
     grouped = out.groupby(group_col, observed=True)
@@ -136,27 +167,37 @@ def add_lagged_features(
     for lag in lags:
         out[f"fareLag{lag}"] = grouped["totalFare"].shift(lag)
 
-    # Most recent observed movement, and its rate of change.
+    # Which way was the price moving, and was that movement speeding up?
+    #   fareChangeLag1  the most recent move        ("it went up $20")
+    #   fareChangeLag2  the move before that        ("it went up $5 before that")
+    #   fareAccel       the difference between them ("so it is accelerating")
     out["fareChangeLag1"] = out["fareLag1"] - out["fareLag2"]
     out["fareChangeLag2"] = out["fareLag2"] - out["fareLag3"]
     out["fareAccel"] = out["fareChangeLag1"] - out["fareChangeLag2"]
 
-    # Where the last observed fare sat relative to its own trailing baseline.
-    # This is the standardised quantity the label thresholds, but computed one
-    # step back, so it is legitimately available.
+    # How unusual was YESTERDAY's fare, on the same scale the spike rule uses?
+    #
+    # This is deliberately the same calculation as spikeZ, just one step back in
+    # time. That makes it legal: it describes a day that has already happened.
+    # It turned out to be one of the most useful features in the project.
+    # (Dividing by zero would give nonsense, so a zero spread becomes "unknown".)
     out["zLag1"] = (out["fareLag1"] - out["rollMean"]) / out["rollStd"].replace(0, np.nan)
 
     out["seatsRemainingLag1"] = grouped["seatsRemaining"].shift(1)
     out["seatsChangeLag1"] = out["seatsRemainingLag1"] - grouped["seatsRemaining"].shift(2)
 
-    # Position within the trajectory: how much history the model actually has.
+    # How many times has this flight been priced before now? A model behaves
+    # differently on the first observation of a flight, where it has nothing to
+    # go on, than on the twentieth.
     out["observationIndex"] = grouped.cumcount()
 
     out["rollStdRatio"] = out["rollStd"] / out["rollMean"].replace(0, np.nan)
     return out
 
 
-#: Predictors, grouped by what makes them available at prediction time.
+#: The 32 features, sorted into the buckets described at the top of this file.
+#: Grouping them this way is what let us report which KIND of information the
+#: models leaned on most, not just which individual columns.
 FEATURE_GROUPS: dict[str, tuple[str, ...]] = {
     "temporal": (
         "daysBeforeDeparture",
@@ -209,17 +250,22 @@ FEATURE_COLUMNS: tuple[str, ...] = tuple(
 
 
 def encode_features(frame: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
-    """Categorical columns to integer codes, everything to float32.
+    """Turn words into numbers, because models cannot do arithmetic on text.
 
-    Lives here rather than beside a model so that both the tree and the network
-    families can use it without either importing the other's dependencies --
-    PyTorch and XGBoost cannot share a process.
+    Airlines arrive as names like "Delta" or "JetBlue". Each distinct name is
+    swapped for a number (Delta -> 0, JetBlue -> 1, and so on).
 
-    Integer codes rather than one-hot: the categoricals are low-cardinality
-    (four routes, six carriers, six departure bands). For the tree this is
-    exact. For the network it is a simplification -- codes imply an ordering
-    that does not exist, and learned embeddings would be the more principled
-    choice -- and it is recorded as such rather than hidden.
+    This function sits here, on its own, rather than next to either model. That
+    is deliberate: XGBoost and PyTorch cannot be loaded into the same program on
+    this machine without it crashing, so anything both need has to live somewhere
+    neutral that imports neither.
+
+    An honest limitation, stated rather than buried: numbering categories this
+    way implies an order that does not exist -- it hints that JetBlue is
+    "greater than" Delta. Decision trees do not care, because they only ever ask
+    "is this value in this group or not". The neural network does care a little,
+    and the textbook fix (learned embeddings) was not attempted here. It is
+    written up as a limitation.
     """
     out = frame[list(cols)].copy()
     for col in out.columns:
@@ -229,14 +275,17 @@ def encode_features(frame: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
 
 
 def assert_no_leaky_features(columns: list[str] | tuple[str, ...]) -> None:
-    """Fail if a feature list contains a column derived from the target.
+    """Safety check: refuse to run if any banned column has crept into the features.
 
-    Call before fitting. The classification label is a deterministic function of
-    ``totalFare`` at the predicted observation, so its presence would produce a
-    near-perfect score that means nothing.
+    Called before every fit. If the fare itself reached the model, the score
+    would come out near perfect and would mean absolutely nothing, and the
+    mistake would be very easy to miss because nothing would visibly break.
+
+    Like the other guard in this project, this one was tested by feeding it a
+    deliberately bad list to confirm it actually refuses.
 
     Raises:
-        AssertionError: If any forbidden column is present.
+        AssertionError: If a banned column is present.
     """
     leaks = sorted(set(columns) & LEAKY_COLUMNS)
     if leaks:
@@ -248,11 +297,13 @@ def assert_no_leaky_features(columns: list[str] | tuple[str, ...]) -> None:
 
 
 def build_feature_frame(df: pd.DataFrame, lags: tuple[int, ...] = (1, 2, 3)) -> pd.DataFrame:
-    """Run the full feature pipeline in order.
+    """Run all three feature-building steps, in order.
+
+    Order matters: the lagged features need the flights sorted by date, and
+    add_lagged_features does that sorting, so it goes last.
 
     Returns:
-        A sorted copy carrying every column in :data:`FEATURE_COLUMNS` alongside
-        the identifiers and labels needed for splitting and evaluation.
+        The data with all 32 features attached, ready for a model.
     """
     out = add_calendar_features(df)
     out = add_itinerary_features(out)

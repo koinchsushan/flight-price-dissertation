@@ -1,14 +1,26 @@
-"""Metrics for the two prediction tasks.
+"""How we mark the models.
 
-Accuracy is deliberately absent from the classification metrics. At a spike rate
-of roughly 8%, a classifier that never predicts a spike scores 92% accurate
-while being useless, so accuracy would flatter every model and separate none of
-them. Precision, recall and F1 are reported instead, with ROC AUC and average
-precision as threshold-independent summaries.
+WHY THERE IS NO ACCURACY SCORE ANYWHERE IN THIS PROJECT
+This is worth being ready to explain, because it is the first thing someone
+usually asks.
 
-Average precision matters more than ROC AUC under class imbalance: it summarises
-the precision-recall curve, which reflects performance on the minority class,
-whereas ROC AUC is buoyed by the large number of easy negatives.
+Only about 8% of days are spikes. So a model that lazily says "no spike" every
+single time, and never gets anything right, is still correct 92% of the time.
+Accuracy would make that useless model look excellent, and would make every
+model look roughly the same. It is the wrong ruler for a rare event, so it is
+left out entirely.
+
+WHAT WE USE INSTEAD
+  precision  Of the times we shouted "spike!", how often were we right?
+  recall     Of the spikes that actually happened, how many did we catch?
+  F1         One number balancing the two, since they pull against each other.
+             Shout constantly and recall is great but precision is awful.
+             Shout almost never and precision is great but recall is awful.
+
+  ROC AUC and average precision are summaries that do not depend on where we
+  draw the "probably yes" line. Of the two, average precision is the more
+  honest here, because ROC AUC gets flattered by the huge number of easy,
+  obviously-not-a-spike days. Saito and Rehmsmeier (2015) show exactly this.
 """
 
 from __future__ import annotations
@@ -30,12 +42,12 @@ from sklearn.metrics import (
 def classification_metrics(
     y_true: np.ndarray, y_prob: np.ndarray, threshold: float = 0.5
 ) -> dict[str, float]:
-    """Precision, recall, F1 and threshold-independent summaries.
+    """Mark a spike-prediction model.
 
     Args:
-        y_true: Binary labels.
-        y_prob: Predicted probability of the positive class.
-        threshold: Decision boundary applied to ``y_prob``.
+        y_true: What actually happened (1 = spike, 0 = no spike).
+        y_prob: The model's confidence, between 0 and 1.
+        threshold: Where "probably not" becomes "probably yes". Default 0.5.
     """
     y_pred = (y_prob >= threshold).astype(int)
     positives = int(y_true.sum())
@@ -54,10 +66,20 @@ def classification_metrics(
 
 
 def regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
-    """RMSE, MAE and R² for the fare-level task.
+    """Mark a fare-predicting model. Both error measures, always.
 
-    MAE is reported alongside RMSE because fares are heavy-tailed: RMSE is
-    dominated by a few large misses, while MAE describes the typical error.
+    RMSE and MAE both measure "how far off were we", but they disagree on
+    purpose, and reporting only one would have misled this entire project:
+
+      MAE  the plain average miss. $20 out on average means $20.
+      RMSE squares the errors first, so a few enormous misses count for far
+           more than lots of small ones.
+
+    Fares sit still most of the time and then jump. So a model can win on RMSE
+    (it handles the jumps less badly) while LOSING on MAE (it is worse on the
+    ordinary days). That is exactly what happened here: XGBoost beat the naive
+    baseline on RMSE and lost to it on MAE in all ten rounds. Reporting RMSE on
+    its own would have hidden that completely.
     """
     return {
         "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
@@ -71,15 +93,17 @@ def regression_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, floa
 def best_f1_threshold(
     y_true: np.ndarray, y_prob: np.ndarray, grid: np.ndarray | None = None
 ) -> tuple[float, float]:
-    """Find the decision threshold maximising F1.
+    """Find the best place to draw the "probably yes" line.
 
-    **Must be called on validation data, never on the test set.** The harness
-    carves a validation slice from the end of each training window for this
-    purpose; tuning on test would report a threshold chosen with knowledge of
-    the answers.
+    Tries every cut-off from 0.05 to 0.95 and keeps whichever gives the best F1.
+
+    IMPORTANT: this must only ever be run on validation data, never on the test
+    data. The harness sets aside the last two weeks of each training window for
+    exactly this. Choosing the line on the test set would mean looking at the
+    answers before deciding how to answer.
 
     Returns:
-        ``(threshold, f1_at_that_threshold)``.
+        The chosen cut-off, and the F1 score it achieved.
     """
     if grid is None:
         grid = np.arange(0.05, 0.96, 0.01)
@@ -90,11 +114,16 @@ def best_f1_threshold(
 
 
 def summarise_folds(results: pd.DataFrame, metrics: tuple[str, ...]) -> pd.DataFrame:
-    """Mean and standard deviation of each metric across folds.
+    """Average the five rounds, and report how much they varied.
 
-    The spread is the point of running multiple folds: a model that wins on
-    average but with a spread overlapping its rival has not been shown to be
-    better, and the write-up should say so rather than ranking on the mean.
+    The variation is the whole reason for running five rounds rather than one.
+
+    If model A averages 0.377 and model B averages 0.350, that looks like a win
+    for A -- until you notice that A itself bounced between 0.29 and 0.46 across
+    the five rounds. A gap smaller than a model's own round-to-round wobble has
+    not been demonstrated at all. Nine of the nineteen comparisons in this
+    project turned out to be exactly that, and the write-up reports them as
+    undecided rather than pretending there was a winner.
     """
     available = [m for m in metrics if m in results.columns]
     stats = results[available].agg(["mean", "std"]).T

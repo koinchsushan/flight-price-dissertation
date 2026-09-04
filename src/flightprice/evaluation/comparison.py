@@ -1,22 +1,30 @@
-"""Comparing model families over paired folds, and appraising the trade-off.
+"""Deciding whether one model is genuinely better than another.
 
-Rolling-origin validation produces one score per fold per model, and because
-every model saw the identical folds those scores are **paired**. That pairing is
-what makes a difference testable: comparing two means while ignoring it would
-throw away the fact that fold 1 is hard for everyone and fold 4 easy for
-everyone.
+THE RULE THIS FILE ENFORCES
+A difference smaller than a model's own round-to-round wobble is not a
+difference at all.
 
-**A difference smaller than the fold-to-fold variation is not a difference.**
-This is the whole reason the project chose rolling-origin over a single split
-(García Crespi et al., 2026): a single split reports one number per model and
-offers no way to tell a real gap from a lucky cut date. Every comparative claim
-in the write-up is therefore run through :func:`paired_comparison` and reported
-with its verdict, including the ones that fail.
+WHY THE COMPARISON IS "PAIRED"
+Every model was tested on exactly the same five rounds. That matters. Round 1
+happens to be hard for every model, round 4 easy for every model. So instead of
+comparing two averages and ignoring that, we compare them round by round:
 
-A caveat stated rather than hidden: with five folds the paired t-test has very
-little power. It can confirm a large, consistent difference; it cannot establish
-that two models are equivalent. "Within noise" here means *not shown to differ*,
-never *shown to be the same*.
+    round   model A   model B   A minus B
+      1      0.32      0.30       +0.02
+      2      0.35      0.33       +0.02
+      3      0.39      0.36       +0.03
+      4      0.39      0.38       +0.01
+      5      0.42      0.39       +0.03
+
+Consistently ahead by a small amount is far stronger evidence than being ahead
+on average once. This is what a paired t-test measures.
+
+THE HONEST CAVEAT, STATED RATHER THAN BURIED
+Five rounds is not many, so this test is weak. It can confirm a big, consistent
+gap. It cannot prove two models are equally good. So when we say "within fold
+noise" we mean "we could not show a difference" -- never "we showed they are
+the same". Nine of our nineteen comparisons landed there, and all nine are
+reported rather than quietly dropped.
 """
 
 from __future__ import annotations
@@ -26,7 +34,9 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-#: Metrics where a larger value is better.
+#: Scores where bigger is better (F1, recall and so on). Everything else --
+#: RMSE, MAE -- is an error measurement, where smaller is better. The code needs
+#: to know which is which before it can say who won.
 HIGHER_IS_BETTER: frozenset[str] = frozenset(
     {"f1", "precision", "recall", "roc_auc", "avg_precision", "r2"}
 )
@@ -34,7 +44,12 @@ HIGHER_IS_BETTER: frozenset[str] = frozenset(
 
 @dataclass(frozen=True)
 class Comparison:
-    """Result of comparing two models on one metric across paired folds."""
+    """The answer to "is model A better than model B?", with the workings shown.
+
+    Everything needed to defend the claim is kept here: both averages, the gap,
+    how many rounds each model won, how much the gap itself varied, and the
+    p-value. The 'verdict' field is the plain-English bottom line.
+    """
 
     metric: str
     name_a: str
@@ -65,28 +80,42 @@ def paired_comparison(
     name_b: str = "B",
     alpha: float = 0.05,
 ) -> Comparison:
-    """Compare two models on one metric, over folds they both ran.
+    """Compare two models on one score, round by round.
 
     Args:
-        scores_a, scores_b: Per-fold scores, indexed by fold so that they align.
-        metric: Used to decide the direction of "better".
-        alpha: Significance level for the paired t-test.
+        scores_a, scores_b: Each model's score in each round, labelled by round
+            so that round 1 is compared against round 1 and not round 3.
+        metric: Which score. Used to work out whether bigger or smaller wins.
+        alpha: How sure we insist on being. 0.05 is the usual academic standard:
+            we only call it a real difference if there is under a 5% chance of
+            seeing a gap this consistent by luck alone.
 
     Returns:
-        A :class:`Comparison`. ``verdict`` is either "distinguishable" or
-        "within fold noise" — the latter meaning the difference was not shown,
-        not that the models were shown to be equal.
+        The verdict, which is either "distinguishable" (a real difference) or
+        "within fold noise" (we could not show one -- which is NOT the same as
+        showing the two models are equal).
     """
     from scipy import stats
 
+    # Only compare rounds both models actually ran, and line them up so round 1
+    # is set against round 1.
     common = scores_a.index.intersection(scores_b.index)
     a = scores_a.loc[common].to_numpy(dtype="float64")
     b = scores_b.loc[common].to_numpy(dtype="float64")
 
     higher_better = metric in HIGHER_IS_BETTER
     differences = a - b
+
+    # Simple, readable tally first: how many rounds did A actually win?
+    # "9 out of 10 rounds" is often more persuasive to a reader than a p-value.
     wins_a = int((differences > 0).sum() if higher_better else (differences < 0).sum())
 
+    # The formal test. It asks: if the two models were really equally good, how
+    # often would we see a gap this consistent purely by chance? A small p-value
+    # means "rarely, so the gap is probably real".
+    #
+    # Guarded because the test is undefined with one round, or if every round
+    # produced an identical gap.
     if len(common) > 1 and np.std(differences) > 0:
         t_statistic, p_value = stats.ttest_rel(a, b)
     else:
@@ -113,7 +142,12 @@ def paired_comparison(
 
 
 def comparison_table(comparisons: list[Comparison]) -> pd.DataFrame:
-    """Tabulate several comparisons, most clearly separated first."""
+    """Lay several comparisons out as a table, clearest results at the top.
+
+    Sorted by p-value, so the differences we are most confident about appear
+    first and the undecided ones sink to the bottom. This produces the
+    nineteen-row table reported in the Results chapter.
+    """
     rows = [
         {
             "metric": c.metric,
@@ -137,12 +171,24 @@ def comparison_table(comparisons: list[Comparison]) -> pd.DataFrame:
 def confusion_from_metrics(
     precision: float, recall: float, n_positive: int, n_total: int
 ) -> dict[str, float]:
-    """Recover a confusion matrix from reported precision, recall and counts.
+    """Work backwards from the scores to the raw counts of each kind of mistake.
 
-    The model notebooks stored metrics rather than raw predictions, and the
-    counts are recoverable exactly:
+    The four possible outcomes, in plain terms:
+        TP  we said "spike" and there was one          (correct warning)
+        FP  we said "spike" and there was not          (false alarm)
+        FN  we said nothing and a spike happened       (missed it)
+        TN  we said nothing and nothing happened       (correct silence)
 
-    ``TP = recall x P``, ``FN = P - TP``, ``FP = TP(1 - precision)/precision``.
+    The model notebooks saved scores rather than every individual prediction, so
+    the counts are rebuilt from the scores. This is exact arithmetic, not an
+    estimate -- precision and recall are defined from these counts, so the
+    definitions can simply be rearranged:
+
+        recall    = TP / (all real spikes)   ->  TP = recall x real spikes
+        precision = TP / (all warnings)      ->  FP = TP x (1 - precision) / precision
+
+    We need these counts because the cost analysis below has to weigh the two
+    kinds of mistake against each other, and scores alone cannot do that.
     """
     true_positive = recall * n_positive
     false_negative = n_positive - true_positive
@@ -162,19 +208,27 @@ def confusion_from_metrics(
 def expected_cost(
     confusion: dict[str, float], miss_cost_ratio: float, false_alarm_cost: float = 1.0
 ) -> float:
-    """Expected cost of an operating point, per test window.
+    """Work out what a model's mistakes would cost, given how bad each kind is.
 
-    Absolute currency values are deliberately avoided. What matters is the
-    *ratio* between the two errors, and that ratio is a property of the
-    application rather than of the data:
+    This function produces the most interesting finding in the project, so it is
+    worth being comfortable explaining.
 
-    - A **missed spike** means the traveller is not warned and pays the higher
-      fare.
-    - A **false alarm** means they are told to book when they need not have, and
-      may forgo a later saving.
+    The two mistakes do not hurt equally:
+      - A MISSED spike leaves the traveller unwarned. They pay the higher fare.
+      - A FALSE ALARM tells them to book when waiting would have been fine. They
+        lose a saving they might have got.
 
-    Sweeping the ratio shows which configuration a product should choose, and at
-    what point that choice changes.
+    Which is worse depends entirely on the product, not on our data. So instead
+    of inventing pound values -- which would be made up -- we sweep the RATIO.
+    "What if a miss is twice as bad as a false alarm? Ten times? Thirty?"
+
+    Doing that revealed three bands. Below 5x, the unweighted model is cheapest.
+    Between 5x and 27x, the weighted one. Above 28x, the LSTM -- the model that
+    lost every single statistical comparison in this project -- becomes the
+    right one to deploy, because it catches the most spikes.
+
+    Being statistically best and being commercially right are two different
+    things, and this function is what demonstrates it.
     """
     return (
         confusion["FN"] * miss_cost_ratio * false_alarm_cost

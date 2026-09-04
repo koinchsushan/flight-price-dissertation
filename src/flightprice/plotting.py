@@ -1,9 +1,11 @@
-"""Shared plotting configuration and figure persistence.
+"""Shared settings for charts, so every figure in the dissertation matches.
 
-Every figure in the dissertation is produced through :func:`save_fig` so that
-resolution, format and location are identical across notebooks, and so that the
-figures directory always reflects the committed code rather than whatever was
-last run by hand.
+Every single figure goes through save_fig() below. That guarantees they all
+share the same resolution, the same file format and the same folder -- so the
+dissertation never ends up with one crisp chart next to one blurry one.
+
+It also means the figures folder always reflects the code that is committed,
+rather than whatever happened to be run by hand last.
 """
 
 from __future__ import annotations
@@ -27,9 +29,9 @@ PALETTE: tuple[str, ...] = (
 
 
 def set_plot_style() -> None:
-    """Apply the project-wide matplotlib/seaborn style.
+    """Apply the shared look for charts: colours, grid, font sizes.
 
-    Call once near the top of each notebook, after the imports.
+    Call once near the top of each notebook, just after the imports.
     """
     sns.set_theme(style="whitegrid", palette=list(PALETTE))
     mpl.rcParams.update(
@@ -50,16 +52,21 @@ def set_plot_style() -> None:
 
 
 def save_fig(fig: plt.Figure, name: str, verbose: bool = True) -> Path:
-    """Write a figure to ``reports/figures`` at publication resolution.
+    """Save a chart to reports/figures at print quality (300 dpi).
+
+    300 dpi is the resolution printed work needs. A chart saved at screen
+    resolution looks fine in a notebook and turns to mush in a printed
+    dissertation.
 
     Args:
-        fig: The figure to write.
-        name: Filename stem, without extension. Use a numeric prefix matching
-            the notebook, e.g. ``"01_fare_distribution"``.
-        verbose: Print the destination path.
+        fig: The chart to save.
+        name: The filename without the extension. Prefix it with the notebook
+            number, e.g. "01_fare_distribution", so the figures folder sorts
+            itself into the order the work was done.
+        verbose: Print where it was written.
 
     Returns:
-        The path written to.
+        The path it was written to.
     """
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     path = FIGURES_DIR / f"{name}.{FIGURE_FORMAT}"

@@ -1,9 +1,13 @@
-"""Central configuration: paths, constants and reproducibility settings.
+"""Every fixed number and setting the project uses, gathered in one place.
 
-Every hard-coded value used across the pipeline lives here so that it can be
-cited once in the methodology chapter rather than hunted through the codebase.
-Values marked "verified" were confirmed against a primary source during the
-research phase; each is documented in the README.
+WHY ONE FILE INSTEAD OF SCATTERING THEM
+If the spike threshold appeared in four different notebooks, sooner or later
+three would say 2 and one would say 2.5, and nobody would notice. Keeping every
+constant here means there is exactly one place to look, one place to change, and
+one place the methodology chapter can point at.
+
+If you are asked "where does the number 10 for the window come from?", the
+answer is this file, and the experiment in notebook 02 that chose it.
 """
 
 from __future__ import annotations
@@ -34,26 +38,40 @@ RAW_SUBSET: Path = DATA_DIR / "jfk_lax_bos_lga.csv"
 # Reproducibility
 # --------------------------------------------------------------------------- #
 
-#: Single seed used for every stochastic component (train/test shuffling within
-#: folds, SMOTE/ADASYN synthesis, XGBoost subsampling, LSTM weight init).
-#: A fixed seed is what makes the three-way model comparison defensible.
+#: The random seed. This is what makes the whole project reproducible.
+#:
+#: Several steps involve randomness -- which rows each tree sees, what the neural
+#: network's starting values are, the order batches are shuffled in. Left alone,
+#: every run would give slightly different numbers and none of the figures in
+#: the dissertation could be reproduced.
+#:
+#: Fixing the seed makes the randomness repeat identically every time. Run the
+#: notebooks again on another machine and the same numbers come out. 42 is the
+#: conventional choice and has no significance beyond that.
 RANDOM_SEED: int = 42
 
 
 def set_seeds(seed: int = RANDOM_SEED) -> None:
-    """Seed every RNG the pipeline touches.
+    """Fix the randomness. Call this at the top of every notebook, before anything else.
 
-    Call once at the top of each notebook, before any model is built.
+    Called before any model is built, so that every random choice made
+    afterwards follows the same fixed sequence on every run.
     """
     random.seed(seed)
     np.random.seed(seed)
 
-    # Torch is seeded only when it is ALREADY loaded, and is deliberately not
-    # imported here. PyTorch and XGBoost each bundle their own OpenMP runtime,
-    # and loading both into one process aborts it on macOS -- the failure shows
-    # up as a Jupyter kernel dying with no traceback, far from this line. A
-    # notebook that needs torch imports it itself; one that does not must not
-    # have it pulled in as a side effect of seeding.
+    # Seed PyTorch only if the notebook has ALREADY loaded it. Do not import it
+    # here, however convenient that would look.
+    #
+    # The reason is a genuine bug that cost hours to find. PyTorch and XGBoost
+    # each ship their own copy of a shared low-level component, and loading both
+    # into one notebook kills it on a Mac -- no error, no traceback, the kernel
+    # just dies, usually far away from the real cause.
+    #
+    # An earlier version of this function imported torch unconditionally, which
+    # meant that simply CALLING set_seeds poisoned every notebook that used
+    # XGBoost. Now a notebook that wants torch imports it itself, and one that
+    # does not never gets it by accident.
     torch = sys.modules.get("torch")
     if torch is None:
         return
